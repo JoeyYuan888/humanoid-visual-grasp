@@ -1,0 +1,9 @@
+bool enable_admittance
+float64[] reset_joint_positions
+int32[] lock_index
+int32[] ref_index
+string arm_type
+float64 ref_weight
+---
+bool success
+string message

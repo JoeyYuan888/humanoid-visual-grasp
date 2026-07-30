@@ -1,0 +1,18 @@
+# Goal - 与 JointsSeqTracking.srv 的 Request 一致
+float64[] states                        # 每个点期望的关节角度（展平）
+int8 joint_num                          # 关节角度个数，0 表示不指定
+float64[] time_points                   # 每个点的绝对时间（或每段时长）
+float64 max_period                      # 最大等待周期
+float64 weight                          # 每段权重
+
+---
+# Result - 与 JointsSeqTracking.srv 的 Response 一致
+bool success
+
+---
+# Feedback - 执行过程中的进度反馈
+uint32 current_segment_index            # 当前所在段索引（0=第1段，...）
+uint32 total_segments                   # 总段数
+float32 segment_progress                # 当前段内进度 0.0 ~ 1.0
+float32 progress                        # 整体进度 0.0 ~ 1.0
+float64 time_elapsed                    # 已执行时间（秒）

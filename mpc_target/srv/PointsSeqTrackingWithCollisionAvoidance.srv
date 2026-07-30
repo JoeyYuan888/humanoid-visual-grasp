@@ -1,0 +1,10 @@
+# Request
+geometry_msgs/PoseArray left_poses      # 左手目标序列（每个Pose包含位置和姿态）
+geometry_msgs/PoseArray right_poses     # 右手目标序列
+float64[] time_points                   # 每个点的绝对时间（或每段时长，需约定）
+float64 max_period                      # 最大等待周期
+float64 weight                          # 每段权重
+
+---
+# Response
+bool success

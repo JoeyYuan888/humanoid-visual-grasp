@@ -1,0 +1,6 @@
+float64[] joint_state   # waist, left arm, right arm
+int32[] lock_index
+bool neck_track         # true -> turn on / false -> turn off
+---
+bool success
+string message

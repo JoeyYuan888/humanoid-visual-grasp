@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>ocs2_msgs</name>
+  <version>0.0.1</version>
+  <description>OCS2 MPC message and service definitions used by WA MPC topics.</description>
+
+  <maintainer email="user@example.com">naviai</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>message_generation</build_depend>
+
+  <exec_depend>message_runtime</exec_depend>
+
+  <export/>
+</package>

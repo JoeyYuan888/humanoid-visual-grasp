@@ -1,0 +1,98 @@
+{
+  "updated_at": "2026-07-21",
+  "source": "debug_mpc_interfaces.py user output",
+  "mpc_prefix": "/wa",
+  "confirmed_services": [
+    "/wa/points_seq_tracking",
+    "/wa/joints_seq_tracking"
+  ],
+  "confirmed_topics": {
+    "/DualArmMobile/currentEEPose/FrameL": {
+      "type": "geometry_msgs/PoseStamped",
+      "sampled": true,
+      "position": {
+        "x": 0.08412524592246058,
+        "y": 0.34750168716385826,
+        "z": 0.7549584981512277
+      },
+      "orientation": {
+        "x": 0.1202643441453931,
+        "y": -0.10630428911110074,
+        "z": -0.03178210031093594,
+        "w": 0.9865220644991614
+      }
+    },
+    "/DualArmMobile/currentEEPose/FrameR": {
+      "type": "geometry_msgs/PoseStamped",
+      "sampled": true,
+      "position": {
+        "x": 0.08751397723180908,
+        "y": -0.34683451911927826,
+        "z": 0.7550747206263844
+      },
+      "orientation": {
+        "x": -0.11996524638125176,
+        "y": -0.10738083344238834,
+        "z": 0.03553919982431095,
+        "w": 0.9863136729994932
+      }
+    },
+    "/DualArmMobile/currenState": {
+      "type": "ocs2_msgs/mpc_target_trajectories",
+      "exists": true,
+      "sampled": false,
+      "joint_num": null,
+      "rostopic_type": "ocs2_msgs/mpc_target_trajectories",
+      "rosmsg_show": "failed: unknown package [ocs2_msgs]",
+      "rospack_find": "failed: package 'ocs2_msgs' not found",
+      "note": "Topic type was discovered from ROS master, but the rosbridge shell/container cannot load the custom ocs2_msgs message package. This is an environment/source issue. joint_num remains unconfirmed until this topic is decoded from an MPC workspace that contains ocs2_msgs, or another valid source gives stateTrajectory[0].value length."
+    }
+  },
+  "missing_topics": [
+    "/wrist_force_control/left_arm_compensated_force",
+    "/wrist_force_control/right_arm_compensated_force"
+  ],
+  "blocked_items": [
+    "Cannot confirm joints_seq_tracking joint_num until /DualArmMobile/currenState can be decoded or another valid source gives the stateTrajectory[0].value length.",
+    "Do not enable admittance or wrist-force-dependent logic until force topics are confirmed."
+  ],
+  "current_decision": {
+    "freeze_joints_seq_tracking": true,
+    "freeze_currenState_dependency": true,
+    "freeze_admittance": true,
+    "continue_with": [
+      "/wa/points_seq_tracking",
+      "/DualArmMobile/currentEEPose/FrameR",
+      "/DualArmMobile/currentEEPose/FrameL"
+    ],
+    "points_seq_dry_run": {
+      "script": "run_mpc_points_dry_run.py",
+      "status": "request structure verified from user output",
+      "arm": "right",
+      "current_pose": {
+        "position": {
+          "x": 0.08745053054425823,
+          "y": -0.3454267924087248,
+          "z": 0.7546782083239774
+        },
+        "orientation": {
+          "x": -0.11891866475321539,
+          "y": -0.10650161245238135,
+          "z": 0.03757575072099808,
+          "w": 0.9864602478945153
+        }
+      },
+      "request_summary": {
+        "service": "/wa/points_seq_tracking",
+        "left_poses_len": 0,
+        "right_poses_len": 2,
+        "time_points": [5.0, 5.0],
+        "max_period": 12.0,
+        "weight": 1.0,
+        "type": "quintic",
+        "sent": false
+      }
+    },
+    "next_step": "If MPC mode is enabled and safety is ready, first execute hold-current-pose or a very small +z test with run_mpc_points_dry_run.py."
+  }
+}

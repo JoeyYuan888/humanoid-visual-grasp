@@ -1,0 +1,16 @@
+{
+  "description": "Vendor hand-back marker board config. Verify marker_size_m and marker layout against the physical jig before final calibration.",
+  "dictionary": "DICT_6X6_50",
+  "marker_size_m": 0.035,
+  "markers": {
+    "0": {"center_m": [-0.02, 0.02, 0.0], "yaw_deg": 0.0},
+    "1": {"center_m": [0.02, 0.02, 0.0], "yaw_deg": 0.0},
+    "2": {"center_m": [-0.02, -0.02, 0.0], "yaw_deg": 0.0},
+    "3": {"center_m": [0.02, -0.02, 0.0], "yaw_deg": 0.0}
+  },
+  "tcp_to_board": {
+    "translation_m": [0.002351, -0.001143, 0.005623],
+    "rpy_deg": [0.573, -1.146, 0.286],
+    "convention": "T/R copied from vendor sample image; confirm this is TCP->board before final use"
+  }
+}

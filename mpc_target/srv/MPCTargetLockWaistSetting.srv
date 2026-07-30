@@ -1,0 +1,5 @@
+# Online adjustment of state/input weight (broadcast to all dimensions)
+int32[] lock_index
+---
+bool success
+string message

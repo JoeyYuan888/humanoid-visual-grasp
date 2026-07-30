@@ -1,0 +1,23 @@
+# Goal - 与 PointsSeqTracking.srv 的 Request 一致，在导纳模式下执行末端轨迹跟踪
+geometry_msgs/PoseArray left_poses      # 左手目标序列
+geometry_msgs/PoseArray right_poses     # 右手目标序列
+float64[] time_points                   # 每个点的绝对时间（或每段时长）
+float64 max_period                      # 最大等待周期
+float64 weight                          # 每段权重
+string type                             # "quintic", "spline"
+
+---
+# Result
+bool success
+
+---
+# Feedback - 进度反馈 + 导纳特有信息
+uint32 current_segment_index            # 当前所在段索引（0=第1段：起点→第1个waypoint）
+uint32 total_segments                   # 总段数（= waypoint 数）
+float32 segment_progress                # 当前段内进度 0.0 ~ 1.0
+float32 progress                        # 整体进度 0.0 ~ 1.0
+float64 time_elapsed                    # 已执行时间（秒）
+float64[] pose_error_L                  # 左手末端跟踪误差，6D：[dx,dy,dz,rx,ry,rz]
+float64[] pose_error_R                  # 右手末端跟踪误差，同上
+float64[] contact_force_L               # 左手接触力/力矩，6D：[Fx,Fy,Fz,Tx,Ty,Tz]
+float64[] contact_force_R               # 右手接触力/力矩，同上

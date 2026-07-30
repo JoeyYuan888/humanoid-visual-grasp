@@ -1,0 +1,16 @@
+{
+  "name": "neck_home",
+  "part": "neck",
+  "arm_type": 4,
+  "service": "/zj_humanoid/upperlimb/go_home/neck",
+  "joint_order": [
+    "Neck_Z",
+    "Neck_Y"
+  ],
+  "commanded_joint": null,
+  "measured_joint": null,
+  "call": "{}",
+  "validated": true,
+  "precondition": "Before calling this SDK neck service, disable MPC mode with: rosservice call /wa/wa_hardware_interface/mpc_mode_setting \"data: false\"",
+  "description": "头部官方 go_home 复位服务；用户实测 success。建议在右臂已经按 P3->P2->P1 安全回收后执行。放置阶段如果仍需要相机观察，再单独定义放置观察位。"
+}

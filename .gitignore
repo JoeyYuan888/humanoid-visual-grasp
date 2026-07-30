@@ -1,0 +1,35 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environments
+.venv/
+.env
+.env.*
+
+# Runtime data/logs
+data/grasp_data_*.csv
+data/qr_debug_*.csv
+data/qr_*_*.png
+
+# Keep committed calibration inputs/results, but ignore ad-hoc captures by default.
+handeye_calibration/data/*.csv
+!handeye_calibration/data/vendor_board_cam2head_samples_20260729_164114.csv
+
+# Generated archives/source-drop copies; source folders are tracked instead.
+*.zip
+
+# Office temporary files
+.~lock.*
+doc/**/.~lock.*
+
+# Old local document backups
+doc/backup_old_docs_*/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
