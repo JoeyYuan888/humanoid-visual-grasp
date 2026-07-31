@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 
+import cv2
 import numpy as np
 import roslibpy
 from roslibpy.core import ServiceException
@@ -31,15 +32,16 @@ from robot_grasp import config
 from robot_grasp.grasp_flow import object_conf, select_grasp_target, summarize_target
 from robot_grasp.logger import DataLogger
 from robot_grasp.ros_client import ROSClient
-from robot_grasp.sdk_motion_client import SDKMotionClient
 from robot_grasp.vision_pipeline import VisionPipeline
 
 from tools.run_mpc_visual_grasp_test import (
     DEFAULT_CAM2HEAD,
     DEFAULT_LOCKED_TARGET,
+    _build_graph,
     _camera_point_m,
     _connect,
     _call,
+    _find_path,
     _load_transform,
     _lookup_transform,
     _object_base_from_target,
@@ -53,6 +55,41 @@ NECK_SERVICE = "/wa/wa_hardware_interface/neck_movej"
 MPC_MODE_SERVICE = "/wa/wa_hardware_interface/mpc_mode_setting"
 WAIST_LOCK_SERVICE = "/wa/waist_lock_setting"
 JOINT_STATES_TOPIC = "/zj_humanoid/upperlimb/joint_states"
+
+
+def _print_tf_debug(transforms: dict[tuple[str, str], dict]):
+    frames = sorted({frame for edge in transforms for frame in edge})
+    print(f"[TF] 本次共采到 {len(transforms)} 条 transform, {len(frames)} 个 frame")
+    if frames:
+        print("[TF] frame 列表:")
+        for name in frames:
+            print(f"    - {name}")
+
+    keywords = ("BASE", "HEAD", "NECK", "WAIST", "realsense", "head", "base", "neck")
+    relevant = [
+        (parent, child)
+        for parent, child in sorted(transforms)
+        if any(key in parent or key in child for key in keywords)
+    ]
+    if relevant:
+        print("[TF] 相关 transform:")
+        for parent, child in relevant:
+            print(f"    {parent} -> {child}")
+    else:
+        print("[TF] 没有采到包含 BASE/HEAD/NECK/realsense 的 transform")
+
+    graph = _build_graph(transforms)
+    candidates = [
+        ("BASE", "HEAD"),
+        ("root", "HEAD"),
+        ("BASE", "NECK"),
+        ("BASE", "realsense_head_link"),
+        ("HEAD", "realsense_head_link"),
+    ]
+    print("[TF] 常见路径检查:")
+    for start, goal in candidates:
+        path = _find_path(graph, start, goal)
+        print(f"    {start} -> {goal}: {'OK' if path is not None else 'missing'}")
 
 
 def _set_mpc_mode(client, enabled: bool):
@@ -194,44 +231,29 @@ def _call_neck(client, neck_z: float, neck_y: float, duration: float, required: 
     return response
 
 
-def _call_sdk_neck(ws_url: str, home: bool, verify_client=None, verify: bool = True,
-                   target_z: float = 0.0, target_y: float = 0.43, tolerance: float = 0.04):
-    sdk = SDKMotionClient(ws_url=ws_url, auto_disable_mpc=True)
-    try:
-        if not sdk.connect():
-            raise RuntimeError(f"无法连接 SDK rosbridge: {ws_url}")
-        if home:
-            print("[*] SDK neck home")
-            response = sdk.neck_home()
-            target_z, target_y = 0.0, 0.0
-            wait_time = 4.0
-        else:
-            print("[*] SDK neck look down")
-            response = sdk.neck_look_down()
-            wait_time = 4.0
-        print(f"[sdk_neck] {response}")
-        if response and response.get("success") is False:
-            raise RuntimeError(f"SDK neck 返回失败: {response}")
-        if verify and verify_client is not None:
-            time.sleep(wait_time + 0.3)
-            after = _wait_for_neck_state(verify_client, timeout=2.0)
-            if after is None:
-                print(f"[!] 未读到 {JOINT_STATES_TOPIC}，无法确认 SDK neck 是否到位")
-            else:
-                err_z = abs(after[0] - target_z)
-                err_y = abs(after[1] - target_y)
-                print(f"    after  Neck_Z={after[0]:.3f}, Neck_Y={after[1]:.3f}, err=({err_z:.3f},{err_y:.3f})")
-                if err_z > tolerance or err_y > tolerance:
-                    raise RuntimeError(
-                        f"SDK neck 调用完成但关节未到目标: target=({target_z:.3f},{target_y:.3f}), "
-                        f"actual=({after[0]:.3f},{after[1]:.3f})"
-                    )
-        return response
-    finally:
-        sdk.disconnect()
+def _cleanup_vision_async(pipeline: VisionPipeline, client: ROSClient,
+                          show_window: bool, window_name: str):
+    def _cleanup():
+        try:
+            pipeline.stop()
+        except Exception as exc:
+            print(f"[!] 视觉 pipeline 清理异常，已忽略: {exc}")
+        if show_window:
+            try:
+                cv2.destroyWindow(window_name)
+            except Exception:
+                pass
+        try:
+            client.disconnect()
+        except Exception as exc:
+            print(f"[!] 视觉 rosbridge 清理异常，已忽略: {exc}")
+
+    threading.Thread(target=_cleanup, daemon=True).start()
 
 
-def _run_vision(ws_url: str, seconds: float, preferred_label: str) -> tuple[dict | None, str | None]:
+def _run_vision(ws_url: str, seconds: float, preferred_label: str,
+                show_window: bool = False, window_name: str = "MPC Perception Lock",
+                frame_timeout: float = 5.0) -> tuple[dict | None, str | None]:
     logger = DataLogger()
     pipeline = VisionPipeline()
     client = ROSClient(ws_url=ws_url)
@@ -244,74 +266,91 @@ def _run_vision(ws_url: str, seconds: float, preferred_label: str) -> tuple[dict
     sample_frames = 0
     sample_detects = 0
 
-    try:
-        if not client.connect():
-            raise RuntimeError(f"无法连接视觉 rosbridge: {ws_url}")
-        last_stats = client.get_stats()
-        print(f"[*] 开始视觉检测 {seconds:.1f}s，目标类别: {preferred_label}")
-        while time.time() - start < seconds:
-            rgb, depth, cam_info, fc = client.get_frames()
-            if rgb is None or fc == last_frame_count:
-                time.sleep(0.01)
-                continue
-            last_frame_count = fc
-            sample_frames += 1
-            raw_rgb, _, raw_rgb_updated_at = client.get_raw_rgb()
-            result = pipeline.process(
-                rgb=rgb,
-                depth=depth,
-                cam_info=cam_info,
-                frame_count=fc,
-                client_stats=client.get_stats(),
-                raw_rgb=raw_rgb,
-                raw_rgb_updated_at=raw_rgb_updated_at,
-                fps=0.0,
-            )
-            latest_result = result
-            if result["should_detect"]:
-                sample_detects += 1
-            target = select_grasp_target(result["object_results"], preferred_label=preferred_label)
-            if target is not None and (
-                best_target is None or object_conf(target) > object_conf(best_target)
-            ):
-                best_target = target
-
-            now = time.time()
-            if now - last_perf_time >= config.PERF_LOG_INTERVAL_SEC and last_stats is not None:
+    if not client.connect():
+        _cleanup_vision_async(pipeline, client, show_window, window_name)
+        raise RuntimeError(f"无法连接视觉 rosbridge: {ws_url}")
+    last_stats = client.get_stats()
+    print(f"[*] 开始视觉检测 {seconds:.1f}s，目标类别: {preferred_label}")
+    if show_window:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        print(f"[*] 已打开视觉窗口: {window_name} | q=提前结束检测")
+    while time.time() - start < seconds:
+        rgb, depth, cam_info, fc = client.get_frames()
+        if rgb is None or fc == last_frame_count:
+            if sample_frames == 0 and time.time() - start > frame_timeout:
                 stats = client.get_stats()
-                elapsed = now - last_perf_time
-                debug = result["debug"]
-                logger.log_perf(fc, {
-                    **debug,
-                    "display_fps": sample_frames / elapsed,
-                    "rgb_rx_fps": (stats["rgb_count"] - last_stats["rgb_count"]) / elapsed,
-                    "depth_msg_rx_fps": (stats["depth_msg_count"] - last_stats["depth_msg_count"]) / elapsed,
-                    "depth_rx_fps": (stats["depth_count"] - last_stats["depth_count"]) / elapsed,
-                    "detect_fps": sample_detects / elapsed,
-                    "infer_ms": result["avg_infer_ms"],
-                    "last_infer_ms": result["last_infer_ms"],
-                    "det_count": len(result["detections"]),
-                    "depth_age_ms": max(0.0, (now - stats["depth_updated_at"]) * 1000)
-                    if stats["depth_updated_at"] > 0 else 0.0,
-                    "raw_rgb_age_ms": max(0.0, (now - stats.get("raw_rgb_updated_at", 0)) * 1000)
-                    if stats.get("raw_rgb_updated_at", 0) > 0 else 0.0,
-                })
-                last_perf_time = now
-                last_stats = stats
-                sample_frames = 0
-                sample_detects = 0
+                print(
+                    f"[!] {frame_timeout:.1f}s 内没有收到可用 RGB 帧: "
+                    f"rgb_count={stats.get('rgb_count', 0)} depth_msg_count={stats.get('depth_msg_count', 0)} "
+                    f"depth_count={stats.get('depth_count', 0)} camera_info={'yes' if cam_info else 'no'}"
+                )
+                break
+            if show_window and (cv2.waitKey(5) & 0xFF) == ord("q"):
+                print("[*] 用户提前结束视觉检测")
+                break
+            time.sleep(0.01)
+            continue
+        last_frame_count = fc
+        sample_frames += 1
+        raw_rgb, _, raw_rgb_updated_at = client.get_raw_rgb()
+        result = pipeline.process(
+            rgb=rgb,
+            depth=depth,
+            cam_info=cam_info,
+            frame_count=fc,
+            client_stats=client.get_stats(),
+            raw_rgb=raw_rgb,
+            raw_rgb_updated_at=raw_rgb_updated_at,
+            fps=0.0,
+        )
+        latest_result = result
+        if result["should_detect"]:
+            sample_detects += 1
+        target = select_grasp_target(result["object_results"], preferred_label=preferred_label)
+        if target is not None and (
+            best_target is None or object_conf(target) > object_conf(best_target)
+        ):
+            best_target = target
+        if show_window:
+            cv2.imshow(window_name, result["annotated"])
+            if (cv2.waitKey(1) & 0xFF) == ord("q"):
+                print("[*] 用户提前结束视觉检测")
+                break
 
-        csv_path = logger.save(os.path.join(PROJECT_ROOT, "data"))
-        if latest_result is not None:
-            print("[*] 最后一帧 object_results:")
-            for obj in latest_result["object_results"]:
-                print(f"    {summarize_target(obj)}")
-        if best_target is not None:
-            print(f"[✓] 选择目标: {summarize_target(best_target)}")
-        return best_target, csv_path
-    finally:
-        pipeline.stop()
-        client.disconnect()
+        now = time.time()
+        if now - last_perf_time >= config.PERF_LOG_INTERVAL_SEC and last_stats is not None:
+            stats = client.get_stats()
+            elapsed = now - last_perf_time
+            debug = result["debug"]
+            logger.log_perf(fc, {
+                **debug,
+                "display_fps": sample_frames / elapsed,
+                "rgb_rx_fps": (stats["rgb_count"] - last_stats["rgb_count"]) / elapsed,
+                "depth_msg_rx_fps": (stats["depth_msg_count"] - last_stats["depth_msg_count"]) / elapsed,
+                "depth_rx_fps": (stats["depth_count"] - last_stats["depth_count"]) / elapsed,
+                "detect_fps": sample_detects / elapsed,
+                "infer_ms": result["avg_infer_ms"],
+                "last_infer_ms": result["last_infer_ms"],
+                "det_count": len(result["detections"]),
+                "depth_age_ms": max(0.0, (now - stats["depth_updated_at"]) * 1000)
+                if stats["depth_updated_at"] > 0 else 0.0,
+                "raw_rgb_age_ms": max(0.0, (now - stats.get("raw_rgb_updated_at", 0)) * 1000)
+                if stats.get("raw_rgb_updated_at", 0) > 0 else 0.0,
+            })
+            last_perf_time = now
+            last_stats = stats
+            sample_frames = 0
+            sample_detects = 0
+
+    csv_path = logger.save(os.path.join(PROJECT_ROOT, "data"))
+    if latest_result is not None:
+        print("[*] 最后一帧 object_results:")
+        for obj in latest_result["object_results"]:
+            print(f"    {summarize_target(obj)}")
+    if best_target is not None:
+        print(f"[✓] 选择目标: {summarize_target(best_target)}")
+    _cleanup_vision_async(pipeline, client, show_window, window_name)
+    return best_target, csv_path
 
 
 def _lock_target(control_client, target: dict, csv_path: str, cam2head_path: str,
@@ -324,6 +363,7 @@ def _lock_target(control_client, target: dict, csv_path: str, cam2head_path: str
     transforms = _sample_tf(control_client, tf_seconds)
     head_to_base = _lookup_transform(transforms, "BASE", "HEAD")
     if head_to_base is None:
+        _print_tf_debug(transforms)
         raise RuntimeError("TF 中没有找到 BASE -> HEAD，不能锁存 BASE 目标")
 
     object_base = _object_base_from_target(target, cam2head, head_to_base)
@@ -351,11 +391,11 @@ def main():
     parser.add_argument("--preferred-label", default="plastic bag")
     parser.add_argument("--detect-seconds", type=float, default=8.0)
     parser.add_argument("--neck-down-z", type=float, default=0.0)
-    parser.add_argument("--neck-down-y", type=float, default=0.43)
+    parser.add_argument("--neck-down-y", type=float, default=0.40)
     parser.add_argument("--neck-home-z", type=float, default=0.0)
     parser.add_argument("--neck-home-y", type=float, default=0.0)
     parser.add_argument("--neck-time", type=float, default=4.0)
-    parser.add_argument("--neck-backend", choices=["sdk", "mpc", "manual"], default="mpc",
+    parser.add_argument("--neck-backend", choices=["mpc", "manual"], default="mpc",
                         help="头部控制后端；默认 mpc：先开启 MPC mode，再调用 /wa/wa_hardware_interface/neck_movej")
     parser.add_argument("--enable-mpc-for-neck", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--enable-neck-track", action=argparse.BooleanOptionalAction, default=False,
@@ -368,10 +408,28 @@ def main():
     parser.add_argument("--cam2head", default=DEFAULT_CAM2HEAD)
     parser.add_argument("--output", default=DEFAULT_LOCKED_TARGET)
     parser.add_argument("--approach-height", type=float, default=0.10)
+    parser.add_argument("--allow-cpu-detect", action="store_true",
+                        help="临时允许 YOLO 在 CPU 上运行；只用于 CUDA/driver 未恢复时锁存坐标，速度会明显下降")
+    parser.add_argument("--cpu-detect-every-n-frames", type=int, default=6,
+                        help="CPU 检测时降低 YOLO 频率，避免 rosbridge/显示被推理阻塞")
+    parser.add_argument("--show-window", action=argparse.BooleanOptionalAction, default=False,
+                        help="检测阶段显示 OpenCV 窗口，方便确认是否捕捉到塑料袋；默认关闭")
+    parser.add_argument("--window-name", default="MPC Perception Lock")
+    parser.add_argument("--frame-timeout", type=float, default=5.0,
+                        help="视觉阶段等待首帧的最长时间；超时后保存空 CSV 并继续安全抬头")
     parser.add_argument("--neck-only", action="store_true", help="只执行 neck down/home，不运行视觉检测")
     parser.add_argument("--skip-neck-down", action="store_true")
     parser.add_argument("--skip-neck-home", action="store_true")
     args = parser.parse_args()
+
+    if args.allow_cpu_detect:
+        config.REQUIRE_CUDA = False
+        config.YOLO_HALF = False
+        config.DETECT_EVERY_N_FRAMES = max(1, int(args.cpu_detect_every_n_frames))
+        print(
+            f"[!] 临时 CPU 检测模式: REQUIRE_CUDA=False, "
+            f"DETECT_EVERY_N_FRAMES={config.DETECT_EVERY_N_FRAMES}"
+        )
 
     print("=" * 70)
     print("  MPC neck perception lock flow")
@@ -380,10 +438,12 @@ def main():
     print(f"  Neck down: [{args.neck_down_z}, {args.neck_down_y}]")
     print(f"  Neck home: [{args.neck_home_z}, {args.neck_home_y}]")
     print(f"  Detect seconds: {args.detect_seconds}")
+    print(f"  Show window: {args.show_window}")
     print(f"  Output: {args.output}")
     print("=" * 70)
 
     control_client = _connect(args.ws_url)
+    primary_error = None
     try:
         if args.neck_backend == "mpc" and args.enable_mpc_for_neck and (not args.skip_neck_down or not args.skip_neck_home):
             _set_mpc_mode(control_client, True)
@@ -400,16 +460,6 @@ def main():
                     verify=args.verify_neck,
                     tolerance=args.neck_verify_tolerance,
                 )
-            elif args.neck_backend == "sdk":
-                _call_sdk_neck(
-                    args.ws_url,
-                    home=False,
-                    verify_client=control_client,
-                    verify=args.verify_neck,
-                    target_z=args.neck_down_z,
-                    target_y=args.neck_down_y,
-                    tolerance=args.neck_verify_tolerance,
-                )
             else:
                 print("[manual] 请人工确认头部已低头到检测姿态")
             time.sleep(args.settle_seconds)
@@ -417,7 +467,14 @@ def main():
         if args.neck_only:
             print("[*] neck-only 模式：跳过视觉检测，只执行未被 skip 的 neck 动作")
         else:
-            target, csv_path = _run_vision(args.ws_url, args.detect_seconds, args.preferred_label)
+            target, csv_path = _run_vision(
+                args.ws_url,
+                args.detect_seconds,
+                args.preferred_label,
+                show_window=args.show_window,
+                window_name=args.window_name,
+                frame_timeout=args.frame_timeout,
+            )
             if target is None or csv_path is None:
                 raise RuntimeError("没有检测到 valid 目标，未锁存 BASE 坐标")
 
@@ -431,33 +488,32 @@ def main():
                 approach_height=args.approach_height,
             )
 
-        if not args.skip_neck_home:
-            if args.neck_backend == "mpc":
-                _call_neck(
-                    control_client,
-                    args.neck_home_z,
-                    args.neck_home_y,
-                    args.neck_time,
-                    verify=args.verify_neck,
-                    tolerance=args.neck_verify_tolerance,
-                )
-            elif args.neck_backend == "sdk":
-                _call_sdk_neck(
-                    args.ws_url,
-                    home=True,
-                    verify_client=control_client,
-                    verify=args.verify_neck,
-                    target_z=args.neck_home_z,
-                    target_y=args.neck_home_y,
-                    tolerance=args.neck_verify_tolerance,
-                )
-            else:
-                print("[manual] 请人工确认头部已复位")
         if args.neck_only:
             print("[✓] neck-only 模式完成，未运行视觉检测")
         if args.neck_backend == "mpc" and args.disable_neck_track_after and args.enable_neck_track:
             _set_neck_track(control_client, False)
+    except Exception as exc:
+        primary_error = exc
+        raise
     finally:
+        if not args.skip_neck_home:
+            try:
+                if args.neck_backend == "mpc":
+                    _call_neck(
+                        control_client,
+                        args.neck_home_z,
+                        args.neck_home_y,
+                        args.neck_time,
+                        verify=args.verify_neck,
+                        tolerance=args.neck_verify_tolerance,
+                    )
+                else:
+                    print("[manual] 请人工确认头部已复位")
+            except Exception as home_exc:
+                if primary_error is not None:
+                    print(f"[!] 主流程已失败，尝试 neck home 也失败: {home_exc}")
+                else:
+                    raise
         try:
             control_client.terminate()
         except Exception:

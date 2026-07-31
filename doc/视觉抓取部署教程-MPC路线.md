@@ -5,9 +5,7 @@
 > MPC 路线完成度：约 45%  
 > 整体项目完成度：约 45%
 
-这份文档只写 **MPC 路线**。目标是在完成手眼标定后，把视觉输出接到 `/wa/points_seq_tracking` 等 MPC 接口，实现更适合全身/多约束控制的抓取执行。
-
-SDK 路线单独看：[视觉抓取部署教程-SDK路线.md](视觉抓取部署教程-SDK路线.md)。
+这份文档只写 **MPC 路线**。目标是在完成手眼标定后，把视觉输出接到 `/wa/points_seq_tracking` 等 MPC 接口，实现更适合全身/多约束控制的抓取执行。头部低头/抬头统一使用 MPC neck。
 
 ## 0. 快速实操流程
 
@@ -86,13 +84,13 @@ go_down/dual_arm              -> success: True
 
 注意：`go_home/whole_body` 不能用 `arm_type: 0`，当前机器人会返回 `The arm type is invalid for the current robot model`。实测完整复位使用 `arm_type: 15`。
 
-SDK 类动作前先关闭 MPC，例如手爪开合、示教模式：
+手掌开合或示教模式前先关闭 MPC：
 
 ```bash
 rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: false"
 ```
 
-注意：厂商已回复 **SDK 手臂路径不能和 MPC 手臂路径组合使用**。因此后续抓取路线不再使用 SDK 的 P1/P2/P3 去接 MPC。P1/P2/P3 只能作为安全路径思路参考，真正执行时要改成 MPC `PoseArray` 里的路径约束点。
+注意：后续抓取路线不再使用非 MPC 手臂轨迹去接 MPC。旧 P1/P2/P3 只能作为安全路径思路参考，真正执行时要改成 MPC `PoseArray` 里的路径约束点。
 
 MPC 手臂运动前再开启 MPC：
 
@@ -100,10 +98,10 @@ MPC 手臂运动前再开启 MPC：
 rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: true"
 ```
 
-头部低头看桌面改用 MPC neck 服务，当前建议值是 `Neck_Y=0.43`：
+头部低头看桌面使用 MPC neck 服务，当前实测稳定值是 `Neck_Y=0.40`：
 
 ```bash
-rosservice call /wa/wa_hardware_interface/neck_movej "neck_joint: [0.0, 0.43]
+rosservice call /wa/wa_hardware_interface/neck_movej "neck_joint: [0.0, 0.40]
 t: 4"
 ```
 
@@ -128,13 +126,15 @@ t: 4"
 
 ```text
 1. 调用 /wa/wa_hardware_interface/mpc_mode_setting 开启 MPC mode
-2. 调用 /wa/wa_hardware_interface/neck_movej 低头到 [0.0, 0.43]
+2. 调用 /wa/wa_hardware_interface/neck_movej 低头到 [0.0, 0.40]
 3. 读取 /zj_humanoid/upperlimb/joint_states，确认 Neck_Y 实际到位
 4. 运行视觉 pipeline，检测 plastic bag 并保存 grasp_data_*.csv
 5. 在低头姿态下采样 TF，转换 camera -> HEAD -> BASE
 6. 保存 data/mpc_locked_target_latest.json
 7. 调用 /wa/wa_hardware_interface/neck_movej 抬头到 [0.0, 0.0] 并确认 Neck_Y 复位
 ```
+
+说明：除非显式加 `--skip-neck-home`，即使没有检测到 valid 目标或锁存失败，脚本也会先尝试执行 MPC neck 抬头复位，再抛出错误。
 
 `/wa/waist_lock_setting neck_track=true` 当前不是主流程依赖。厂商确认 neck_movej 可用条件是先开启 MPC mode。
 
@@ -143,6 +143,21 @@ t: 4"
 ```bash
 conda activate detect
 python tools/run_mpc_perception_lock.py --ws-url ws://192.168.20.98:9091
+```
+
+需要确认检测窗口时加：
+
+```bash
+python tools/run_mpc_perception_lock.py \
+  --ws-url ws://192.168.20.98:9091 \
+  --show-window
+```
+
+如果窗口是黑的，并且输出 `没有收到可用 RGB 帧`，先确认 9091 所连接的 ROS 环境里相机话题是否有数据：
+
+```bash
+rostopic hz /zj_humanoid/sensor/realsense_head/color/image_raw/compressed
+rostopic echo -n 1 /zj_humanoid/sensor/realsense_head/color/camera_info
 ```
 
 输出会落在：
@@ -224,7 +239,7 @@ python tools/capture_mpc_pose.py --ws-url ws://192.168.20.98:9091 --arm right --
 
 ### 0.6.2 设置 MPC 路径约束点
 
-纯 MPC 路线通过 `PoseArray` 中的中间点约束路径，不再走 SDK P1/P2/P3。脚本支持反复添加：
+纯 MPC 路线通过 `PoseArray` 中的中间点约束路径，不再走旧 P1/P2/P3 轨迹。脚本支持反复添加：
 
 ```text
 --via-point X Y Z
@@ -261,7 +276,7 @@ python tools/run_mpc_visual_grasp_test.py --ws-url ws://192.168.20.98:9091 --use
 ```text
 1. 不要修改旧 rosbridge；MPC 测试用 9091。
 2. 启动 rosbridge 前必须 source /workspace/catkin_ws/mpc_ws/devel/setup.bash。
-3. SDK 动作前关 MPC，MPC 运动前开 MPC。
+3. 手掌开合或示教前关 MPC，MPC 运动前开 MPC。
 4. /wa/points_seq_tracking 左右手 poses 数量必须一致；不用的手也要用当前 pose 占位。
 5. 不要用旧 CSV + 复位后的头部 TF 重新算目标，必须使用 locked target。
 6. 还没验证下降抓取前，不要加 --include-descend。
@@ -539,7 +554,7 @@ y: 图像下方
 
 ## 5. 共同基础：头部与手掌辅助接口
 
-当前 MPC 路线里，头部低头/复位改用 MPC 提供的 neck 服务；手指开合仍然使用手掌 SDK 服务。
+当前 MPC 路线里，头部低头/复位统一使用 MPC 提供的 neck 服务；手指开合使用手掌 `joint_switch` 服务。
 
 课程 MPC 文档明确说明：`Neck Joint 并不参与 tcp 解算`。因此，头部低头/复位本身不会改变右手 TCP 的运动学解算；它主要影响相机观测和 `camera -> HEAD -> BASE` 坐标转换时使用的 HEAD 姿态。
 
@@ -554,9 +569,9 @@ run_mpc_visual_grasp_test.py 使用“CSV 里的相机点 + 当前 live TF”计
 当前推荐顺序：
 
 ```text
-1. MPC neck 低头到 Neck_Y=0.43
+1. MPC neck 低头到 Neck_Y=0.40
 2. 视觉检测并保存 CSV
-3. 在头仍保持 0.43 时转换 camera -> HEAD -> BASE，并锁存 target
+3. 在头仍保持 0.40 时转换 camera -> HEAD -> BASE，并锁存 target
 4. target 已固定后，MPC neck 抬头到 Neck_Y=0.0
 5. 开 MPC，执行小步或路径约束测试
 ```
@@ -571,7 +586,7 @@ python tools/run_mpc_perception_lock.py --ws-url ws://192.168.20.98:9091
 如果只单独测试 MPC neck，低头看桌面：
 
 ```bash
-rosservice call /wa/wa_hardware_interface/neck_movej "neck_joint: [0.0, 0.43]
+rosservice call /wa/wa_hardware_interface/neck_movej "neck_joint: [0.0, 0.40]
 t: 4"
 ```
 
@@ -967,7 +982,7 @@ python tools/run_mpc_visual_grasp_test.py --ws-url ws://192.168.20.98:9091 --use
 8. finger_pressures 判断是否抓住
 9. points_seq_tracking 或安全路径移动到扫码位
 10. 近距离 QR
-11. 安全回收，neck go_home
+11. 安全回收，MPC neck 复位
 ```
 
 ## 10. 当前不要踩的坑
