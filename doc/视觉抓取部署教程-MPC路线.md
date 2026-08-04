@@ -583,11 +583,10 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 要求：
 
 ```text
-torch 版本必须带 +cu128
 torch.cuda.is_available() 必须是 True
 ```
 
-RTX 5060 Laptop GPU 是 `sm_120`，旧的 `+cu121` wheel 只支持到 `sm_90`，会报 `CUDA error: no kernel image is available for execution on the device`。如果 CUDA 不可用，项目会直接报错，不会退回 CPU。
+RTX 5060 Laptop GPU 是 `sm_120`，需要使用支持该架构的 PyTorch CUDA wheel，例如本项目留档的 `requirements-torch-cu128.txt`。其他显卡应按本机 GPU/驱动选择匹配的 CUDA 版 PyTorch，不要强行套用 5060 的 cu128 文件。旧的 `+cu121` wheel 只支持到 `sm_90`，在 5060 上会报 `CUDA error: no kernel image is available for execution on the device`。如果 CUDA 不可用，项目会直接报错，不会退回 CPU。
 
 MPC 路线使用同一套视觉输出：
 

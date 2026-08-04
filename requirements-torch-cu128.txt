@@ -1,0 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# GPU PyTorch for RTX 50 series / sm_120, verified on RTX 5060.
+# Install before requirements.txt:
+#   pip install -r requirements-torch-cu128.txt
+
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128

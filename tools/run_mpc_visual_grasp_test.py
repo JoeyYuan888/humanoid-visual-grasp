@@ -70,19 +70,32 @@ def _parse_ws_url(ws_url: str) -> tuple[str, int]:
     return host, int(port)
 
 
-def _connect(ws_url: str):
+def _connect(ws_url: str, retries: int = 1, retry_delay: float = 1.0):
     host, port = _parse_ws_url(ws_url)
-    client = roslibpy.Ros(host=host, port=port)
-    thread = threading.Thread(target=client.run, daemon=True)
-    thread.start()
+    last_error = None
+    for attempt in range(1, retries + 1):
+        client = roslibpy.Ros(host=host, port=port)
+        thread = threading.Thread(target=client.run, daemon=True)
+        thread.start()
 
-    start = time.time()
-    while not client.is_connected:
-        if time.time() - start > config.CONNECT_TIMEOUT:
-            print(f"[✗] 连接超时: {ws_url}")
-            sys.exit(1)
-        time.sleep(0.1)
-    return client
+        start = time.time()
+        while not client.is_connected:
+            if time.time() - start > config.CONNECT_TIMEOUT:
+                last_error = f"连接超时: {ws_url}"
+                try:
+                    client.terminate()
+                except Exception:
+                    pass
+                break
+            time.sleep(0.1)
+        if client.is_connected:
+            return client
+        print(f"[!] rosbridge 连接失败 {attempt}/{retries}: {last_error}")
+        if attempt < retries:
+            time.sleep(retry_delay)
+
+    print(f"[✗] {last_error}")
+    sys.exit(1)
 
 
 def _call(client, name: str, service_type: str, request: dict | None = None) -> dict:
@@ -622,6 +635,10 @@ def main():
                         help="Use a saved BASE target JSON instead of recomputing from CSV and current HEAD TF.")
     parser.add_argument("--tf-seconds", type=float, default=2.0)
     parser.add_argument("--timeout", type=float, default=5.0)
+    parser.add_argument("--connect-retries", type=int, default=1,
+                        help="Retry rosbridge connection this many times before failing.")
+    parser.add_argument("--connect-retry-delay", type=float, default=1.0,
+                        help="Seconds to wait between rosbridge connection retries.")
     parser.add_argument(
         "--approach-height",
         "--above-object-height",
@@ -734,7 +751,7 @@ def main():
     _print_vec("camera point", point_cam)
     _print_vec("head point  ", point_head)
 
-    client = _connect(args.ws_url)
+    client = _connect(args.ws_url, retries=args.connect_retries, retry_delay=args.connect_retry_delay)
     print("\n[✓] 已连接 rosbridge")
     try:
         if not locked:

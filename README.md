@@ -23,9 +23,64 @@ doc/视觉抓取完整技术文档.md
 
 SDK 路线、旧过程记录、旧参数文件已清理，避免误用。
 
+## 环境安装
+
+推荐 Python 3.10。第一次在新电脑安装：
+
+```bash
+conda create -n detect python=3.10 -y
+conda activate detect
+```
+
+使用国内 conda 源安装基础依赖：
+
+```bash
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge
+conda config --set show_channel_urls yes
+conda install -n detect zbar -c conda-forge -y
+```
+
+先安装匹配本机 GPU 的 CUDA 版 PyTorch。
+
+RTX 50 系列/RTX 5060 使用：
+
+```bash
+pip install -r requirements-torch-cu128.txt
+```
+
+其他显卡不要照抄上面的 cu128 文件，应按本机 GPU/驱动选择匹配的 CUDA 版 PyTorch。
+
+然后安装项目通用依赖：
+
+```bash
+pip install --no-deps -r requirements.txt
+```
+
+安装项目依赖时必须使用 `--no-deps`，避免 `ultralytics` 把
+`opencv-contrib-python` 替换成普通 `opencv-python`，也避免 CUDA 版 PyTorch
+被错误依赖覆盖。
+
+安装后确认 CUDA 可用：
+
+```bash
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"
+```
+
+如果输出 `torch.cuda.is_available() == False`，先修 NVIDIA driver/CUDA 环境，不要改成 CPU 版。
+
 ## 快速运行
 
-电脑端使用 `detect` conda 环境：
+先在机器人端进入 `huimin1.4` Docker 容器，启动 MPC rosbridge 9091：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /workspace/catkin_ws/mpc_ws/devel/setup.bash
+roslaunch rosbridge_server rosbridge_websocket.launch port:=9091
+```
+
+然后在电脑端使用 `detect` conda 环境运行完整流程：
 
 ```bash
 conda activate detect

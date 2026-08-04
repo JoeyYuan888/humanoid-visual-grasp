@@ -130,6 +130,10 @@ def _via_cmd(args, via_files: list[str], max_motion: float, use_joints: bool = T
         "tools/run_mpc_visual_grasp_test.py",
         "--ws-url",
         args.ws_url,
+        "--connect-retries",
+        str(args.connect_retries),
+        "--connect-retry-delay",
+        f"{args.connect_retry_delay:.1f}",
         "--use-locked-target",
         args.locked_target,
     ]
@@ -153,6 +157,10 @@ def _descend_cmd(args) -> list[str]:
         "tools/run_mpc_visual_grasp_test.py",
         "--ws-url",
         args.ws_url,
+        "--connect-retries",
+        str(args.connect_retries),
+        "--connect-retry-delay",
+        f"{args.connect_retry_delay:.1f}",
         "--use-locked-target",
         args.locked_target,
         "--include-descend",
@@ -177,6 +185,10 @@ def _approach_and_descend_cmd(args, via_files: list[str]) -> list[str]:
         "tools/run_mpc_visual_grasp_test.py",
         "--ws-url",
         args.ws_url,
+        "--connect-retries",
+        str(args.connect_retries),
+        "--connect-retry-delay",
+        f"{args.connect_retry_delay:.1f}",
         "--use-locked-target",
         args.locked_target,
     ]
@@ -257,6 +269,10 @@ def main():
                         help="Duration per MPC path point, lower is faster. Minimum accepted by child script is 3s.")
     parser.add_argument("--execute-delay", type=float, default=0.0,
                         help="Delay before each MPC service call. Default 0 for integrated flow.")
+    parser.add_argument("--connect-retries", type=int, default=3,
+                        help="Retry rosbridge connection for each MPC child step.")
+    parser.add_argument("--connect-retry-delay", type=float, default=1.0,
+                        help="Seconds to wait between rosbridge connection retries.")
     parser.add_argument("--return-mode", choices=["none", "via3", "via0", "qr-present"], default="via3")
     parser.add_argument("--qr-present-file", default=os.path.join("data", "mpc_qr_present_pose_right.json"),
                         help="MPC pose captured at the post-grasp QR presentation position.")
