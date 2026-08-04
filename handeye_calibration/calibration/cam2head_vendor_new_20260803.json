@@ -1,0 +1,22 @@
+{
+  "created_at": "2026-08-03",
+  "description": "Candidate T_head_camera provided/selected for next MPC grasp tests. Promoted as current default CAM2HEAD on 2026-08-03.",
+  "frame_convention": "HEAD_T_CAMERA / CAM2HEAD",
+  "cam2head_transform_4x4": [
+    [-0.02589883, -0.28658041, 0.95770607, 0.07804458],
+    [-0.99962985, 0.01540832, -0.02242183, 0.03919847],
+    [-0.00833098, -0.95793228, -0.28687339, 0.12356851],
+    [0.0, 0.0, 0.0, 1.0]
+  ],
+  "transform_4x4": [
+    [-0.02589883, -0.28658041, 0.95770607, 0.07804458],
+    [-0.99962985, 0.01540832, -0.02242183, 0.03919847],
+    [-0.00833098, -0.95793228, -0.28687339, 0.12356851],
+    [0.0, 0.0, 0.0, 1.0]
+  ],
+  "status": "current_default",
+  "notes": [
+    "Use this matrix for locked-target and MPC visual grasp tests.",
+    "This is the only retained CAM2HEAD matrix in the active calibration folder."
+  ]
+}

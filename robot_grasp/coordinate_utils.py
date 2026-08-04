@@ -5,7 +5,7 @@ Official chain:
     camera -> CAM2HEAD -> HEAD2BASE(tf) -> object in BASE -> GRASP_OFFSET -> TCP target
 
 This module intentionally does not provide a simplified camera_to_mpc shortcut.
-Do not send camera-frame vision coordinates directly to SDK or MPC motion APIs.
+Do not send camera-frame vision coordinates directly to MPC motion APIs.
 """
 
 from __future__ import annotations

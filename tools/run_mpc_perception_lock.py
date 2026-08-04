@@ -207,7 +207,7 @@ def _call_neck(client, neck_z: float, neck_y: float, duration: float, required: 
         if "mpc_hardware_interface" in text:
             raise RuntimeError(
                 "rosbridge 环境缺 mpc_hardware_interface，无法代理 MPC neck 服务。"
-                "请把本项目的 mpc_hardware_interface/ 放到机器人容器 "
+                "请把本项目的 ros_pkgs/mpc_hardware_interface/ 放到机器人容器 "
                 "/workspace/catkin_ws/mpc_ws/src/，catkin_make 后重启 9091 rosbridge。"
             ) from exc
         raise
@@ -231,8 +231,8 @@ def _call_neck(client, neck_z: float, neck_y: float, duration: float, required: 
     return response
 
 
-def _cleanup_vision_async(pipeline: VisionPipeline, client: ROSClient,
-                          show_window: bool, window_name: str):
+def _make_vision_cleanup(pipeline: VisionPipeline, client: ROSClient,
+                         show_window: bool, window_name: str):
     def _cleanup():
         try:
             pipeline.stop()
@@ -241,6 +241,7 @@ def _cleanup_vision_async(pipeline: VisionPipeline, client: ROSClient,
         if show_window:
             try:
                 cv2.destroyWindow(window_name)
+                cv2.waitKey(1)
             except Exception:
                 pass
         try:
@@ -248,15 +249,16 @@ def _cleanup_vision_async(pipeline: VisionPipeline, client: ROSClient,
         except Exception as exc:
             print(f"[!] 视觉 rosbridge 清理异常，已忽略: {exc}")
 
-    threading.Thread(target=_cleanup, daemon=True).start()
+    return _cleanup
 
 
 def _run_vision(ws_url: str, seconds: float, preferred_label: str,
                 show_window: bool = False, window_name: str = "MPC Perception Lock",
-                frame_timeout: float = 5.0) -> tuple[dict | None, str | None]:
+                frame_timeout: float = 5.0):
     logger = DataLogger()
     pipeline = VisionPipeline()
     client = ROSClient(ws_url=ws_url)
+    cleanup = _make_vision_cleanup(pipeline, client, show_window, window_name)
     latest_result = None
     best_target = None
     start = time.time()
@@ -265,9 +267,10 @@ def _run_vision(ws_url: str, seconds: float, preferred_label: str,
     last_stats = None
     sample_frames = 0
     sample_detects = 0
+    total_frames = 0
 
     if not client.connect():
-        _cleanup_vision_async(pipeline, client, show_window, window_name)
+        cleanup()
         raise RuntimeError(f"无法连接视觉 rosbridge: {ws_url}")
     last_stats = client.get_stats()
     print(f"[*] 开始视觉检测 {seconds:.1f}s，目标类别: {preferred_label}")
@@ -277,7 +280,7 @@ def _run_vision(ws_url: str, seconds: float, preferred_label: str,
     while time.time() - start < seconds:
         rgb, depth, cam_info, fc = client.get_frames()
         if rgb is None or fc == last_frame_count:
-            if sample_frames == 0 and time.time() - start > frame_timeout:
+            if total_frames == 0 and time.time() - start > frame_timeout:
                 stats = client.get_stats()
                 print(
                     f"[!] {frame_timeout:.1f}s 内没有收到可用 RGB 帧: "
@@ -292,6 +295,7 @@ def _run_vision(ws_url: str, seconds: float, preferred_label: str,
             continue
         last_frame_count = fc
         sample_frames += 1
+        total_frames += 1
         raw_rgb, _, raw_rgb_updated_at = client.get_raw_rgb()
         result = pipeline.process(
             rgb=rgb,
@@ -349,22 +353,28 @@ def _run_vision(ws_url: str, seconds: float, preferred_label: str,
             print(f"    {summarize_target(obj)}")
     if best_target is not None:
         print(f"[✓] 选择目标: {summarize_target(best_target)}")
-    _cleanup_vision_async(pipeline, client, show_window, window_name)
-    return best_target, csv_path
+    return best_target, csv_path, cleanup
 
 
-def _lock_target(control_client, target: dict, csv_path: str, cam2head_path: str,
-                 output_path: str, tf_seconds: float, approach_height: float):
-    cam2head = _load_transform(cam2head_path, "cam2head")
-    point_cam = np.array(_camera_point_m(target), dtype=float)
-    point_head = (cam2head @ np.array([*point_cam, 1.0], dtype=float))[:3]
-
+def _sample_head_to_base(control_client, tf_seconds: float) -> np.ndarray:
     print(f"[*] 采样 TF {tf_seconds:.1f}s，查找 BASE -> HEAD")
     transforms = _sample_tf(control_client, tf_seconds)
     head_to_base = _lookup_transform(transforms, "BASE", "HEAD")
     if head_to_base is None:
         _print_tf_debug(transforms)
         raise RuntimeError("TF 中没有找到 BASE -> HEAD，不能锁存 BASE 目标")
+    return head_to_base
+
+
+def _lock_target(control_client, target: dict, csv_path: str, cam2head_path: str,
+                 output_path: str, tf_seconds: float, approach_height: float,
+                 head_to_base: np.ndarray | None = None):
+    cam2head = _load_transform(cam2head_path, "cam2head")
+    point_cam = np.array(_camera_point_m(target), dtype=float)
+    point_head = (cam2head @ np.array([*point_cam, 1.0], dtype=float))[:3]
+
+    if head_to_base is None:
+        head_to_base = _sample_head_to_base(control_client, tf_seconds)
 
     object_base = _object_base_from_target(target, cam2head, head_to_base)
     payload = {
@@ -391,7 +401,7 @@ def main():
     parser.add_argument("--preferred-label", default="plastic bag")
     parser.add_argument("--detect-seconds", type=float, default=8.0)
     parser.add_argument("--neck-down-z", type=float, default=0.0)
-    parser.add_argument("--neck-down-y", type=float, default=0.40)
+    parser.add_argument("--neck-down-y", type=float, default=0.35)
     parser.add_argument("--neck-home-z", type=float, default=0.0)
     parser.add_argument("--neck-home-y", type=float, default=0.0)
     parser.add_argument("--neck-time", type=float, default=4.0)
@@ -444,6 +454,7 @@ def main():
 
     control_client = _connect(args.ws_url)
     primary_error = None
+    vision_cleanup = None
     try:
         if args.neck_backend == "mpc" and args.enable_mpc_for_neck and (not args.skip_neck_down or not args.skip_neck_home):
             _set_mpc_mode(control_client, True)
@@ -464,10 +475,14 @@ def main():
                 print("[manual] 请人工确认头部已低头到检测姿态")
             time.sleep(args.settle_seconds)
 
+        low_head_to_base = None
+        if not args.neck_only:
+            low_head_to_base = _sample_head_to_base(control_client, args.tf_seconds)
+
         if args.neck_only:
             print("[*] neck-only 模式：跳过视觉检测，只执行未被 skip 的 neck 动作")
         else:
-            target, csv_path = _run_vision(
+            target, csv_path, vision_cleanup = _run_vision(
                 args.ws_url,
                 args.detect_seconds,
                 args.preferred_label,
@@ -486,6 +501,7 @@ def main():
                 output_path=args.output,
                 tf_seconds=args.tf_seconds,
                 approach_height=args.approach_height,
+                head_to_base=low_head_to_base,
             )
 
         if args.neck_only:
@@ -514,6 +530,8 @@ def main():
                     print(f"[!] 主流程已失败，尝试 neck home 也失败: {home_exc}")
                 else:
                     raise
+        if vision_cleanup is not None:
+            vision_cleanup()
         try:
             control_client.terminate()
         except Exception:

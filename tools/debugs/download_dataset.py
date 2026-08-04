@@ -3,7 +3,7 @@
 从 Ultralytics NDJSON 导出文件下载 Marine Plastic Debris Detection Dataset。
 
 使用方法:
-    python tools/download_dataset.py
+    python tools/debugs/download_dataset.py
 
 将会在 data/marine-plastic-debris/ 目录下创建 YOLO 格式的数据集:
     data/marine-plastic-debris/

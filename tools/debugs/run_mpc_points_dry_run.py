@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
@@ -306,8 +306,8 @@ def main():
             raise SystemExit(1)
 
         print("\n[EXECUTE] 即将调用 /wa/points_seq_tracking。请确认手在急停上。")
-        print("          5 秒后发送，Ctrl+C 可取消。")
-        time.sleep(5.0)
+        print("          2 秒后发送，Ctrl+C 可取消。")
+        time.sleep(2.0)
         try:
             response = _call(client, POINTS_SERVICE, srv_type, request)
             print(f"[MPC] response: {response}")

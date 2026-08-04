@@ -2,7 +2,7 @@
 二维码识别测试 — 机器人头部 RealSense RGB 图像。
 
 用法:
-    python tools/test_qr.py
+    python tools/debugs/test_qr.py
 
 窗口中:
     q 退出
@@ -21,7 +21,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 

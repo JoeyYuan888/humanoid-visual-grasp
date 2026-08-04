@@ -1,0 +1,51 @@
+{
+  "created_at": "2026-08-04 10:39:26",
+  "source_csv": "<runtime grasp_data csv cleaned after target lock>",
+  "target": {
+    "idx": 1,
+    "label": "plastic bag",
+    "confidence": 0.834846019744873,
+    "bbox": [
+      549,
+      473,
+      855,
+      681
+    ],
+    "center": [
+      702,
+      577
+    ],
+    "qr_text": "",
+    "valid": true,
+    "status": "valid",
+    "x_mm": 62.2,
+    "y_mm": 182.3,
+    "z_mm": 1005.0,
+    "depth_mm": 1005.0,
+    "point_u": 702,
+    "point_v": 542,
+    "depth_roi": [
+      548,
+      473,
+      856,
+      681
+    ]
+  },
+  "camera_point_m": [
+    0.062200000000000005,
+    0.18230000000000002,
+    1.005
+  ],
+  "head_point_m": [
+    0.9866846643809999,
+    -0.04270350908400001,
+    -0.33988848855
+  ],
+  "object_base_m": [
+    0.7972293170944328,
+    -0.057533446082960425,
+    0.44577925040097566
+  ],
+  "default_approach_height_m": 0.1,
+  "note": "Locked BASE target from automated MPC neck perception flow. Reuse after neck pose changes."
+}

@@ -2,8 +2,8 @@
 分析 run_grasp.py 保存的性能采样。
 
 用法:
-    python tools/analyze_perf.py
-    python tools/analyze_perf.py data/grasp_data_YYYYMMDD_HHMMSS.csv
+    python tools/debugs/analyze_perf.py
+    python tools/debugs/analyze_perf.py data/grasp_data_YYYYMMDD_HHMMSS.csv
 """
 
 import csv

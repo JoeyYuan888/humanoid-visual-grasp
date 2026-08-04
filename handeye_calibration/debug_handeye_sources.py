@@ -79,9 +79,9 @@ PATH_QUERIES = [
 ]
 
 
-def _connect():
-    host = config.WS_URL.replace("ws://", "").split(":")[0]
-    port = int(config.WS_URL.replace("ws://", "").split(":")[1])
+def _connect(ws_url: str):
+    host = ws_url.replace("ws://", "").split(":")[0]
+    port = int(ws_url.replace("ws://", "").split(":")[1])
     client = roslibpy.Ros(host=host, port=port)
     thread = threading.Thread(target=client.run, daemon=True)
     thread.start()
@@ -89,7 +89,7 @@ def _connect():
     start = time.time()
     while not client.is_connected:
         if time.time() - start > config.CONNECT_TIMEOUT:
-            print(f"[✗] 连接超时: {config.WS_URL}")
+            print(f"[✗] 连接超时: {ws_url}")
             sys.exit(1)
         time.sleep(0.1)
     return client
@@ -216,15 +216,16 @@ def _print_path(name, path):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--ws-url", default=config.WS_URL)
     parser.add_argument("--sample-seconds", type=float, default=2.0)
     args = parser.parse_args()
 
     print("=" * 70)
     print("  手眼链路来源检查（只读）")
     print("=" * 70)
-    print(f"WebSocket: {config.WS_URL}")
+    print(f"WebSocket: {args.ws_url}")
 
-    client = _connect()
+    client = _connect(args.ws_url)
     print("[✓] 已连接 rosbridge")
 
     print("\n/tf_static 采样:")

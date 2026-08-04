@@ -1,44 +1,36 @@
 # 视觉抓取部署教程索引
 
-当前部署教程已经拆成两条路线，避免 SDK 与 MPC 操作混在一起：
+当前项目已经收敛为 **MPC-only** 路线。SDK 路线文档、SDK 专用脚本和旧 SDK 路径文件已经删除，避免新同事误用历史方案。
+
+日常操作入口：
 
 ```text
-doc/视觉抓取部署教程-SDK路线.md
+doc/视觉抓取完整技术文档.md
+```
+
+保留的部署参考：
+
+```text
 doc/视觉抓取部署教程-MPC路线.md
 ```
 
-两份文档都保留共同内容：
+完整技术文档已经覆盖当前可执行闭环：
 
 ```text
-当前进度快照
-安全原则
-环境准备
-视觉检测与深度定位
-CAM2HEAD 手眼标定
-抓取后近距离 QR 识别业务逻辑
-调试与验证方法
+头部低头锁存塑料袋 BASE 坐标
+-> MPC 右臂抓取
+-> 移动到 QR 展示点
+-> 头部相机扫码
+-> 回抓取点放置
+-> via3->2->1->0 回收
 ```
 
-区别：
+推荐阅读顺序：
 
 ```text
-SDK 路线：使用 /zj_humanoid/upperlimb/* 和 /zj_humanoid/hand/*，适合先打通第一版真实抓取。
-MPC 路线：使用 /wa/points_seq_tracking 等 MPC 接口，适合后续全身/多约束运动执行。
-```
-
-当前项目进度：
-
-```text
-推进到：Step 3 坐标系标定
-当前子任务：头部 RealSense 的 CAM2HEAD 手眼标定
-整体项目完成度：约 45%
-当前卡点：缺 HEAD -> realsense_head_link 外参
-```
-
-建议阅读顺序：
-
-```text
-1. 若当前先继续 SDK 抓取闭环：读 doc/视觉抓取部署教程-SDK路线.md
-2. 若当前继续 MPC 环境/控制验证：读 doc/视觉抓取部署教程-MPC路线.md
-3. 手眼标定单独看：handeye_calibration/HAND_EYE_ALIGNMENT_PLAN.md
+1. doc/README.md
+2. doc/视觉抓取完整技术文档.md
+3. doc/视觉抓取部署教程-MPC路线.md
+4. handeye_calibration/HAND_EYE_ALIGNMENT_PLAN.md
+5. doc/WA型号-MPC使用接口文档-外部 副本.md
 ```

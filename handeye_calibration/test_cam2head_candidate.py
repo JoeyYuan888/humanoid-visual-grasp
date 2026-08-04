@@ -28,7 +28,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_MATRIX = os.path.join(
     SCRIPT_DIR,
     "calibration",
-    "cam2head_vendor_20260724.json",
+    "cam2head_vendor_new_20260803.json",
 )
 
 

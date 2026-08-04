@@ -2,7 +2,7 @@
 抓取业务编排的纯逻辑部分。
 
 这里不直接发机器人运动命令，便于先用 CSV 或视觉输出做 debug。
-后续接 SDK/MPC 时，让运动客户端实现对应方法，再由更高层调用。
+当前真实运动由 MPC flow 脚本编排。
 """
 
 from __future__ import annotations

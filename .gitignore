@@ -21,6 +21,7 @@ handeye_calibration/data/*.csv
 
 # Generated archives/source-drop copies; source folders are tracked instead.
 *.zip
+!ros_pkgs/archives/*.zip
 
 # Office temporary files
 .~lock.*

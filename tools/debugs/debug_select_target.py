@@ -2,8 +2,8 @@
 从 CSV 的最后一条 object_results 中单独 debug 抓取目标选择逻辑。
 
 用法:
-    python tools/debug_select_target.py
-    python tools/debug_select_target.py data/grasp_data_xxx.csv --label cup
+    python tools/debugs/debug_select_target.py
+    python tools/debugs/debug_select_target.py data/grasp_data_xxx.csv --label cup
 """
 
 import argparse
@@ -13,7 +13,7 @@ import json
 import os
 import sys
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 

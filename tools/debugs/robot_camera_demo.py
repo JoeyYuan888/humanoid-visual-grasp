@@ -6,7 +6,7 @@
     pip install roslibpy opencv-python numpy
 
 用法:
-    python tools/robot_camera_demo.py
+    python tools/debugs/robot_camera_demo.py
 """
 
 import sys

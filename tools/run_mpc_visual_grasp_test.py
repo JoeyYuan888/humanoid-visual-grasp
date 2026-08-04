@@ -56,9 +56,12 @@ DEFAULT_CAM2HEAD = os.path.join(
     PROJECT_ROOT,
     "handeye_calibration",
     "calibration",
-    "cam2head_vendor_board_20260729_164716.json",
+    "cam2head_vendor_new_20260803.json",
 )
 DEFAULT_LOCKED_TARGET = os.path.join(PROJECT_ROOT, "data", "mpc_locked_target_latest.json")
+DEFAULT_GRASP_OFFSET_X = -0.04
+DEFAULT_GRASP_OFFSET_Y = -0.10
+DEFAULT_GRASP_OFFSET_Z = 0.35
 
 
 def _parse_ws_url(ws_url: str) -> tuple[str, int]:
@@ -631,10 +634,27 @@ def main():
     parser.add_argument("--no-auto-lift", action="store_true",
                         help="Do not insert the automatic vertical lift before via/target points.")
     parser.add_argument("--include-descend", action="store_true", help="Also include the lower pre-grasp point. Default only moves above target at safe height.")
-    parser.add_argument("--offset-x", type=float, default=0.0, help="Extra target x offset in BASE/MPC meters.")
-    parser.add_argument("--offset-y", type=float, default=0.0, help="Extra target y offset in BASE/MPC meters.")
-    parser.add_argument("--offset-z", type=float, default=0.0, help="Extra target z offset in BASE/MPC meters.")
+    parser.add_argument(
+        "--offset-x",
+        type=float,
+        default=DEFAULT_GRASP_OFFSET_X,
+        help="TCP x compensation from visual object point in BASE/MPC meters. Default -0.04m toward body.",
+    )
+    parser.add_argument(
+        "--offset-y",
+        type=float,
+        default=DEFAULT_GRASP_OFFSET_Y,
+        help="TCP y compensation from visual object point in BASE/MPC meters. Default -0.10m toward robot right.",
+    )
+    parser.add_argument(
+        "--offset-z",
+        type=float,
+        default=DEFAULT_GRASP_OFFSET_Z,
+        help="TCP z compensation from visual object point in BASE/MPC meters. Default 0.35m from teammate grasp test.",
+    )
     parser.add_argument("--duration", type=float, default=8.0)
+    parser.add_argument("--execute-delay", type=float, default=2.0,
+                        help="Seconds to wait before sending an execute request. Use 0 to disable.")
     parser.add_argument("--weight", type=float, default=1.0)
     parser.add_argument("--type", choices=["quintic", "spline"], default="quintic")
     parser.add_argument("--orientation-preset", choices=["current", *ORIENTATION_PRESETS.keys()], default="current",
@@ -951,8 +971,8 @@ def main():
             print(f"[✗] 执行路径累计长度 {execute_distance:.4f}m > --max-motion {args.max_motion:.4f}m，取消执行")
             print("    先 dry-run 查看完整路径累计长度，再设置略大的 --max-motion。")
             raise SystemExit(1)
-        if args.duration < 5.0:
-            print("[✗] 为了首轮安全，duration 不能小于 5.0s")
+        if args.duration < 3.0:
+            print("[✗] 为了实机安全，duration 不能小于 3.0s")
             raise SystemExit(1)
 
         srv_type = _service_type(client, service_name)
@@ -961,8 +981,11 @@ def main():
             raise SystemExit(1)
 
         print(f"\n[EXECUTE] 即将调用 {service_name}。请确认手在急停上。")
-        print("          5 秒后发送，Ctrl+C 可取消。")
-        time.sleep(5.0)
+        if args.execute_delay > 0.0:
+            print(f"          {args.execute_delay:.1f} 秒后发送，Ctrl+C 可取消。")
+            time.sleep(args.execute_delay)
+        else:
+            print("          execute-delay=0，立即发送。")
         try:
             response = _call(client, service_name, srv_type, request)
             print(f"[MPC] response: {response}")

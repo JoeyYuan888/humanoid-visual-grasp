@@ -10,6 +10,7 @@ import os
 
 import numpy as np
 import cv2
+import torch
 from ultralytics import YOLO
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,6 +36,7 @@ CAMERA_INFO_TOPIC = "/zj_humanoid/sensor/realsense_head/color/camera_info"
 YOLO_MODEL = "models/best.pt"  # 当前塑料袋模型
 YOLO_CONF = 0.50        # 置信度过滤阈值，只显示高于该阈值的检测框
 DETECT_EVERY_N_FRAMES = 3  # 每 N 帧做一次 YOLO 推理，降低检测延迟/卡顿
+YOLO_DEVICE = "cuda"
 
 # ==================== 全局状态 ====================
 
@@ -183,16 +185,23 @@ def main():
     print(f"  WebSocket: {WS_URL}")
     print(f"  模型:      {YOLO_MODEL}")
     print(f"  Conf:      {YOLO_CONF:.2f}")
+    print(f"  Device:    {YOLO_DEVICE}")
     print(f"  Detect:    every {DETECT_EVERY_N_FRAMES} frames")
     print("=" * 60)
     print()
 
     # 加载 YOLO 模型
+    if YOLO_DEVICE == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA 不可用，test_yolo 已拒绝退回 CPU。请先确认 nvidia-smi 和 "
+            "python -c \"import torch; print(torch.__version__, torch.cuda.is_available())\""
+        )
     print("[*] 加载 YOLO 模型...")
     model = YOLO(YOLO_MODEL)
-    print(f"[✓] 模型加载完成 ({YOLO_MODEL})")
+    model.to(YOLO_DEVICE)
+    print(f"[✓] 模型加载完成 ({YOLO_MODEL}, device={YOLO_DEVICE})")
     # 预热：推理一次
-    model(np.zeros((480, 640, 3), dtype=np.uint8), conf=YOLO_CONF, verbose=False)
+    model(np.zeros((480, 640, 3), dtype=np.uint8), conf=YOLO_CONF, device=YOLO_DEVICE, verbose=False)
     print()
 
     # 连接机器人
@@ -257,7 +266,7 @@ def main():
                 )
                 if should_detect:
                     t0 = time.time()
-                    last_results = model(frame, conf=YOLO_CONF, verbose=False)
+                    last_results = model(frame, conf=YOLO_CONF, device=YOLO_DEVICE, verbose=False)
                     last_infer_time = (time.time() - t0) * 1000  # ms
                     infer_times.append(last_infer_time)
                     if len(infer_times) > 30:

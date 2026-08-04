@@ -1,9 +1,9 @@
 # 视觉抓取部署教程 - MPC 路线
 
-> 文档版本：v3.0-MPC  
-> 当前阶段：Step 3，暂定厂商 CAM2HEAD 矩阵方向可用，等待尺子/工装确认绝对精度；正在用可修改的 `huimin1.4` 容器重建 MPC/rosbridge 环境  
-> MPC 路线完成度：约 45%  
-> 整体项目完成度：约 45%
+> 文档版本：v3.1-MPC  
+> 当前阶段：两段式 MPC 视觉抓取闭环已跑通；正在整理完整自动流程和稳定性  
+> MPC 路线完成度：约 75%  
+> 整体项目完成度：约 70%
 
 这份文档只写 **MPC 路线**。目标是在完成手眼标定后，把视觉输出接到 `/wa/points_seq_tracking` 等 MPC 接口，实现更适合全身/多约束控制的抓取执行。头部低头/抬头统一使用 MPC neck。
 
@@ -26,9 +26,9 @@
 
 ```text
 conda activate detect
-运行 run_grasp.py
-运行 tools/run_mpc_points_dry_run.py
+运行 tools/run_mpc_perception_lock.py
 运行 tools/run_mpc_visual_grasp_test.py
+运行 tools/run_mpc_full_grasp_flow.py
 ```
 
 当前不要修改旧 rosbridge。MPC 测试使用我们自己的容器和 `9091`：
@@ -84,11 +84,7 @@ go_down/dual_arm              -> success: True
 
 注意：`go_home/whole_body` 不能用 `arm_type: 0`，当前机器人会返回 `The arm type is invalid for the current robot model`。实测完整复位使用 `arm_type: 15`。
 
-手掌开合或示教模式前先关闭 MPC：
-
-```bash
-rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: false"
-```
+手掌 `joint_switch` 当前确认不需要关闭 MPC，可在 MPC mode 开启时直接调用。只有要使用 SDK 手臂控制或示教模式时，才先关闭 MPC。
 
 注意：后续抓取路线不再使用非 MPC 手臂轨迹去接 MPC。旧 P1/P2/P3 只能作为安全路径思路参考，真正执行时要改成 MPC `PoseArray` 里的路径约束点。
 
@@ -98,12 +94,86 @@ MPC 手臂运动前再开启 MPC：
 rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: true"
 ```
 
-头部低头看桌面使用 MPC neck 服务，当前实测稳定值是 `Neck_Y=0.40`：
+### 0.4 当前已跑通的完整抓取流程
+
+当前采用 **两段式**，不要默认合并成一条 MPC command：
+
+```text
+1. MPC neck 低头
+2. 视觉检测 plastic bag，并锁存 BASE 目标
+3. MPC neck 抬头
+4. 手掌放开
+5. via0 -> via1 -> via2 -> via3
+   - 使用 points_seq_tracking_with_joints
+   - 复现示教的身体/手臂/手掌姿态
+6. via3 -> 视觉抓取点
+   - 不使用 --use-joints
+   - 使用视觉 object_base + TCP offset
+7. 手掌闭合
+8. 抓取后返回 via3
+```
+
+完整脚本：
 
 ```bash
-rosservice call /wa/wa_hardware_interface/neck_movej "neck_joint: [0.0, 0.40]
+conda activate detect
+python tools/run_mpc_full_grasp_flow.py \
+  --ws-url ws://192.168.20.98:9091 \
+  --show-window \
+  --return-mode via3 \
+  --execute
+```
+
+如果已经有有效锁存目标，不需要重新低头识别：
+
+```bash
+python tools/run_mpc_full_grasp_flow.py \
+  --ws-url ws://192.168.20.98:9091 \
+  --skip-lock \
+  --return-mode via3 \
+  --execute
+```
+
+完整流程脚本关键参数：
+
+```text
+--skip-lock          使用已有 data/mpc_locked_target_latest.json
+--return-mode via3   抓取后只回到 via3
+--return-mode via0   抓取后 via3->via2->via1->via0 完整收回
+--motion-duration 5  MPC 每个路径点用时，越小越快，底层最小 3s
+--execute-delay 0    完整流程里 MPC service 立即发送
+--combine-approach   实验参数，不作为默认
+```
+
+当前默认参数：
+
+```text
+neck_down_y = 0.35
+offset_x = -0.04     # 向身体 4cm
+offset_y = -0.10     # 向右 10cm
+offset_z = +0.35     # 同事实测 Z 补偿
+above_object_height = 0.02
+motion_duration = 5.0
+execute_delay = 0.0  # 完整流程不等待
+return_mode = via3
+```
+
+注意：
+
+```text
+不要默认使用 --combine-approach。
+组合路径 via0->via3->视觉目标 曾导致手掌/身体以意外姿态下降。
+当前稳定方案是两段式：via0->via3 使用 joints 约束，via3->视觉抓取点不使用 joints。
+```
+
+头部低头看桌面使用 MPC neck 服务，当前命令值使用 `Neck_Y=0.35`：
+
+```bash
+rosservice call /wa/wa_hardware_interface/neck_movej "neck_joint: [0.0, 0.35]
 t: 4"
 ```
+
+注意：`neck_movej` 命令值和 `/zj_humanoid/upperlimb/joint_states` 反馈值存在偏差。实测发 `0.39` 时反馈约 `0.435`，容易接近低头限位；因此当前默认发 `0.35`，目标是让实际反馈落在约 `0.39~0.40` 附近。
 
 脖子复位：
 
@@ -126,7 +196,7 @@ t: 4"
 
 ```text
 1. 调用 /wa/wa_hardware_interface/mpc_mode_setting 开启 MPC mode
-2. 调用 /wa/wa_hardware_interface/neck_movej 低头到 [0.0, 0.40]
+2. 调用 /wa/wa_hardware_interface/neck_movej 低头到 [0.0, 0.35]
 3. 读取 /zj_humanoid/upperlimb/joint_states，确认 Neck_Y 实际到位
 4. 运行视觉 pipeline，检测 plastic bag 并保存 grasp_data_*.csv
 5. 在低头姿态下采样 TF，转换 camera -> HEAD -> BASE
@@ -170,7 +240,7 @@ data/mpc_locked_target_latest.json
 可用分析脚本确认视觉检测：
 
 ```bash
-python tools/analyze_perf.py
+python tools/debugs/analyze_perf.py
 ```
 
 ### 0.5 手动锁存视觉目标备用流程
@@ -207,7 +277,7 @@ rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: true"
 先验证 MPC 服务和右臂小位移：
 
 ```bash
-python tools/run_mpc_points_dry_run.py --ws-url ws://192.168.20.98:9091 --dx 0.01 --execute
+python tools/debugs/run_mpc_points_dry_run.py --ws-url ws://192.168.20.98:9091 --dx 0.01 --execute
 ```
 
 已验证结果：
@@ -320,7 +390,7 @@ python tools/run_mpc_visual_grasp_test.py --ws-url ws://192.168.20.98:9091 --use
 | MPC 消息包 `mpc_target` | 迁移中 | 新容器 `huimin1.4` 中位于 `/workspace/catkin_ws/mpc_ws/src/mpc_target`，需要编译并由同一环境启动 rosbridge |
 | MPC EE pose | 已确认 | `/DualArmMobile/currentEEPose/FrameL` 和 `FrameR` 有样本 |
 | MPC currenState | 待确认 | 话题存在，但当前环境缺 `ocs2_msgs`，无法采样解析 |
-| MPC points dry-run | 已完成 | `tools/run_mpc_points_dry_run.py` 能打印 request |
+| MPC points dry-run | 已完成 | `tools/debugs/run_mpc_points_dry_run.py` 能打印 request |
 | MPC execute | 待小步验证 | `mpc_target` 包已补齐，下一步只允许零位移/极小位移测试 |
 | 手眼标定 | 进行中 | 已保存厂商候选矩阵，方向一致性通过，仍需尺子/工装验证 |
 
@@ -329,8 +399,8 @@ python tools/run_mpc_visual_grasp_test.py --ws-url ws://192.168.20.98:9091 --use
 MPC 调试入口：
 
 ```bash
-python tools/debug_mpc_interfaces.py
-python tools/run_mpc_points_dry_run.py
+python tools/debugs/debug_mpc_interfaces.py
+python tools/debugs/run_mpc_points_dry_run.py
 python tools/run_mpc_visual_grasp_test.py
 ```
 
@@ -338,9 +408,9 @@ python tools/run_mpc_visual_grasp_test.py
 
 ```bash
 python run_grasp.py
-python tools/debug_vision_pipeline.py
+python tools/debugs/debug_vision_pipeline.py
 python tools/test_yolo.py
-python tools/debug_select_target.py
+python tools/debugs/debug_select_target.py
 ```
 
 手眼标定文件：
@@ -372,9 +442,9 @@ MPC 自定义消息包：
   /workspace/catkin_ws/mpc_ws/src/ocs2_msgs
   /workspace/catkin_ws/mpc_ws/src/mpc_hardware_interface
 本项目留档路径:
-  mpc_target/
-  ocs2_msgs/
-  mpc_hardware_interface/
+  ros_pkgs/mpc_target/
+  ros_pkgs/ocs2_msgs/
+  ros_pkgs/mpc_hardware_interface/
 ```
 
 在 `huimin1.4` 容器内先确认包文件完整：
@@ -463,7 +533,7 @@ roslaunch rosbridge_server rosbridge_websocket.launch port:=9091
 电脑端测试时对应传：
 
 ```bash
-python tools/run_mpc_points_dry_run.py --ws-url ws://<机器人IP>:9091 --dx 0.01
+python tools/debugs/run_mpc_points_dry_run.py --ws-url ws://<机器人IP>:9091 --dx 0.01
 ```
 
 如果调用 MPC neck 时电脑端报：
@@ -472,7 +542,7 @@ python tools/run_mpc_points_dry_run.py --ws-url ws://<机器人IP>:9091 --dx 0.0
 Unable to load the manifest for package mpc_hardware_interface
 ```
 
-说明 9091 rosbridge 的环境缺 `mpc_hardware_interface`。把本项目里的 `mpc_hardware_interface/` 或 `mpc_hardware_interface_catkin_ready_20260728.zip` 放到 `/workspace/catkin_ws/mpc_ws/src/`，重新 `catkin_make`，然后重启 9091 rosbridge。
+说明 9091 rosbridge 的环境缺 `mpc_hardware_interface`。把本项目里的 `ros_pkgs/mpc_hardware_interface/` 或 `ros_pkgs/archives/mpc_hardware_interface_catkin_ready_20260728.zip` 放到 `/workspace/catkin_ws/mpc_ws/src/`，重新 `catkin_make`，然后重启 9091 rosbridge。
 
 注意：厂商文档正文曾写 `MPCNeckJointMove.srv` 的 `t` 是 `int32`，但厂商实际给出的包里是：
 
@@ -569,9 +639,9 @@ run_mpc_visual_grasp_test.py 使用“CSV 里的相机点 + 当前 live TF”计
 当前推荐顺序：
 
 ```text
-1. MPC neck 低头到 Neck_Y=0.40
+1. MPC neck 低头到 Neck_Y=0.35
 2. 视觉检测并保存 CSV
-3. 在头仍保持 0.40 时转换 camera -> HEAD -> BASE，并锁存 target
+3. 在头仍保持低头姿态时转换 camera -> HEAD -> BASE，并锁存 target
 4. target 已固定后，MPC neck 抬头到 Neck_Y=0.0
 5. 开 MPC，执行小步或路径约束测试
 ```
@@ -586,7 +656,7 @@ python tools/run_mpc_perception_lock.py --ws-url ws://192.168.20.98:9091
 如果只单独测试 MPC neck，低头看桌面：
 
 ```bash
-rosservice call /wa/wa_hardware_interface/neck_movej "neck_joint: [0.0, 0.40]
+rosservice call /wa/wa_hardware_interface/neck_movej "neck_joint: [0.0, 0.35]
 t: 4"
 ```
 
@@ -600,10 +670,19 @@ t: 4"
 手掌安全姿态和当前塑料袋抓取参数：
 
 ```text
-预张开/准备抓取: [0.3, 1.0, 0.35, 0.35, 0.35, 0.35]
-抓取闭合:       [0.3, 1.0, 0.88, 0.81, 0.35, 0.35]
-放开过渡:       [0.3, 1.0, 0.35, 0.35, 0.35, 0.35]
+抓取闭合:       [0.5, 0.8, 0.84, 0.84, 0.35, 0.35]
 完全放开:       [-0.1, 0.05, 0.35, 0.35, 0.35, 0.35]
+抓取 TCP X 补偿: -0.04 m
+抓取 TCP Y 补偿: -0.10 m
+抓取 TCP Z 补偿: +0.35 m
+```
+
+当前抓取 TCP 补偿使用同事实测值和现场微调值。它是视觉 `object_base` 点到 MPC TCP 目标点的补偿，不是 SDK 坐标系转 MPC 坐标系的补偿。
+
+```text
+target_tcp.x = object_base.x - 0.04   # 向身体 4cm
+target_tcp.y = object_base.y - 0.10   # 向右 10cm
+target_tcp.z = object_base.z + 0.35   # 同事实测 Z 补偿
 ```
 
 手指限位：
@@ -620,20 +699,14 @@ t: 4"
 手掌接口：
 
 ```bash
-rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: false"
 rosservice call /zj_humanoid/hand/finger_pressures/right/zero "{}"
-rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: false"
-rosservice call /zj_humanoid/hand/joint_switch/right "{q: [0.3, 1.0, 0.35, 0.35, 0.35, 0.35]}"
-rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: false"
-rosservice call /zj_humanoid/hand/joint_switch/right "{q: [0.3, 1.0, 0.88, 0.81, 0.35, 0.35]}"
+rosservice call /zj_humanoid/hand/joint_switch/right "{q: [0.5, 0.8, 0.84, 0.84, 0.35, 0.35]}"
 rostopic echo -n 1 /zj_humanoid/hand/finger_pressures/right
 ```
 
-放开时也分两段，先回到预张开，再完全放开：
+放开：
 
 ```bash
-rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: false"
-rosservice call /zj_humanoid/hand/joint_switch/right "{q: [0.3, 1.0, 0.35, 0.35, 0.35, 0.35]}"
 rosservice call /zj_humanoid/hand/joint_switch/right "{q: [-0.1, 0.05, 0.35, 0.35, 0.35, 0.35]}"
 ```
 
@@ -678,10 +751,10 @@ python handeye_calibration/solve_cam2head.py handeye_calibration/data/pairs.csv
 当前有效 CAM2HEAD 矩阵：
 
 ```text
-handeye_calibration/calibration/cam2head_vendor_board_20260729_164716.json
+handeye_calibration/calibration/cam2head_vendor_new_20260803.json
 ```
 
-它来自厂家手背标定板 8 组有效样本，求解残差约 `2.6 / 4.0 mm`。旧的 `cam2head_vendor_20260724.json` 只是别人标定的候选矩阵，不再作为默认抓取矩阵。
+当前抓取测试先使用 2026-08-03 记录的新矩阵。旧的 `cam2head_vendor_board_20260729_164716.json` 保留用于回退和对比。
 
 ```bash
 python handeye_calibration/test_cam2head_candidate.py --latest-csv
@@ -695,7 +768,7 @@ python handeye_calibration/test_cam2head_candidate.py --point-mm 100 150 1200
 只查接口，不发运动：
 
 ```bash
-python tools/debug_mpc_interfaces.py
+python tools/debugs/debug_mpc_interfaces.py
 ```
 
 已确认：
@@ -724,7 +797,7 @@ rostopic echo -n 1 /DualArmMobile/currenState
 ERROR: Cannot load message class for [ocs2_msgs/mpc_target_trajectories].
 ```
 
-说明当前环境仍缺 `ocs2_msgs`。现在已拿到 `ocs2_msgs/` 并补齐 `package.xml`、`CMakeLists.txt`；需要把它和 `mpc_target/` 一起放到 huimin1.4 的 `/workspace/catkin_ws/mpc_ws/src/` 后重新 `catkin_make`，再重启 9091 rosbridge。
+说明当前环境仍缺 `ocs2_msgs`。现在已拿到 `ocs2_msgs/` 并补齐 `package.xml`、`CMakeLists.txt`；需要把它和 `ros_pkgs/mpc_target/` 一起放到 huimin1.4 的 `/workspace/catkin_ws/mpc_ws/src/` 后重新 `catkin_make`，再重启 9091 rosbridge。
 
 验证通过后，下一阶段可以测试：
 
@@ -792,7 +865,7 @@ python tools/run_mpc_visual_grasp_test.py \
 默认只打印请求，不发运动：
 
 ```bash
-python tools/run_mpc_points_dry_run.py
+python tools/debugs/run_mpc_points_dry_run.py
 ```
 
 它读取当前右手末端：
@@ -827,7 +900,7 @@ Left and right poses size mismatch
 只有确认 MPC 环境有 `mpc_target` 包、现场安全员准备好，并且目标是零位移或极小位移时，才允许显式执行：
 
 ```bash
-python tools/run_mpc_points_dry_run.py --execute
+python tools/debugs/run_mpc_points_dry_run.py --execute
 ```
 
 历史执行曾经失败：
@@ -861,12 +934,13 @@ python tools/run_mpc_visual_grasp_test.py
 ```text
 1. 读取最新 data/grasp_data_*.csv 的 object_results
 2. 默认选择 label=plastic bag 且 3D 有效、置信度最高的目标
-3. 使用 handeye_calibration/calibration/cam2head_vendor_board_20260729_164716.json 做 camera -> HEAD
+3. 使用 handeye_calibration/calibration/cam2head_vendor_new_20260803.json 做 camera -> HEAD
 4. 从 /tf 采样 BASE -> HEAD
 5. 生成 object base 和物体上方 approach target
 6. 读取 /DualArmMobile/currentEEPose/FrameR 当前末端姿态
 7. 默认生成当前点 -> 高位安全点 -> 目标上方高位点
-8. 默认不发送运动命令
+8. 默认使用 --offset-x -0.04, --offset-y -0.10, --offset-z 0.35 作为塑料袋抓取 TCP 补偿
+9. 默认不发送运动命令
 ```
 
 如果要指定某个检测框：
@@ -884,7 +958,7 @@ python tools/run_mpc_visual_grasp_test.py --csv data/grasp_data_20260727_133848.
 第一轮真实执行只能做零位移或极小位移验证：
 
 ```bash
-python tools/run_mpc_points_dry_run.py --dz 0.01 --execute
+python tools/debugs/run_mpc_points_dry_run.py --dz 0.01 --execute
 ```
 
 等确认 MPC 小步移动正常后，先在低头检测姿态下锁存一次 BASE 目标。锁存以后，即使脖子复位，也不要再用旧 CSV + 新头部 TF 重新算目标：
@@ -910,7 +984,7 @@ python tools/run_mpc_visual_grasp_test.py --ws-url ws://192.168.20.98:9091 --use
 该脚本默认不下降到预抓取高度，只移动到目标上方的 `--safe-travel-z` 高位。若要把下降点也加入路径，需要显式打开：
 
 ```bash
-python tools/run_mpc_visual_grasp_test.py --use-locked-target --include-descend
+python tools/run_mpc_visual_grasp_test.py --use-locked-target --include-descend --offset-z 0.35
 ```
 
 当前脚本默认只控制末端位置，不主动改变手掌/腕部姿态。具体实现是所有目标点都复用 `/DualArmMobile/currentEEPose/FrameR` 读到的当前 orientation，所以如果当前手掌竖直于地面，运动过程中它也会尽量保持这个姿态。
@@ -938,7 +1012,7 @@ x=0.0, y=-0.707, z=0.0, w=0.707
 第一步先原地测试姿态，不移动位置：
 
 ```bash
-python tools/run_mpc_points_dry_run.py --ws-url ws://192.168.20.98:9091 --orientation-preset doc-grasp --execute
+python tools/debugs/run_mpc_points_dry_run.py --ws-url ws://192.168.20.98:9091 --orientation-preset doc-grasp --execute
 ```
 
 如果姿态方向正确，再在高位小步接近时带上姿态。推荐使用现场保存的姿态文件：
@@ -1003,7 +1077,7 @@ MPC 路线下一步：
 ```text
 1. 在 huimin1.4 容器编译 /workspace/catkin_ws/mpc_ws/src/mpc_target
 2. 用同一个 source 过 mpc_ws/devel/setup.bash 的 shell 启动 rosbridge
-3. 在电脑端运行 tools/debug_mpc_interfaces.py，确认 `mpc_target` 可通过 rosbridge 解析
+3. 在电脑端运行 tools/debugs/debug_mpc_interfaces.py，确认 `mpc_target` 可通过 rosbridge 解析
 4. 确认 /wa/points_seq_tracking 能 execute 一个零位移或极小位移任务
 5. 用尺子/工装验证厂商 CAM2HEAD 候选矩阵的绝对误差
 6. 用 robot_grasp/coordinate_utils.py 跑通 camera -> BASE/MPC target
