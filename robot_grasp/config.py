@@ -13,6 +13,7 @@ TOPIC_RGB_RAW = "/zj_humanoid/sensor/realsense_head/color/image_raw"
 TOPIC_DEPTH = "/zj_humanoid/sensor/realsense_head/aligned_depth_to_color/image_raw"
 TOPIC_DEPTH_COMPRESSED = "/zj_humanoid/sensor/realsense_head/aligned_depth_to_color/image_raw/compressedDepth"
 TOPIC_CAMERA_INFO = "/zj_humanoid/sensor/realsense_head/color/camera_info"
+SERVICE_REALSENSE_RESTART = "/zj_humanoid/sensor/realsense_head/restart"
 
 # ==================== YOLO ====================
 
@@ -39,7 +40,7 @@ QR_LOCKED_FULL_RESCAN_INTERVAL_SEC = 12.0 # 扫齐后更低频补扫，降低对
 QR_MAX_ROIS_PER_SCAN = 2        # 每次 QR 任务最多扫几个 ROI，防止全量扫描拖慢深度流
 QR_PRIORITY_CLASSES = []        # 抓后 QR 检查阶段再设置目标 ROI/类别优先级
 QR_MEMORY_TTL_SEC = 60.0        # 静态任务中二维码识别到一次后长时间锁存，避免重复扫码拖慢
-QR_RAW_RGB_THROTTLE_MS = 3000   # 低频订阅 raw RGB 用于小二维码识别；过高会拖慢 compressed 主流
+QR_RAW_RGB_THROTTLE_MS = 1000   # 抓后静态 QR 扫码约 1Hz 订阅 raw RGB，兼顾质量和 rosbridge 负载
 QR_MAX_RAW_AGE_MS = 4500        # 静态场景允许使用较旧 raw，提高小二维码识别机会
 USE_SEPARATE_QR_CLIENT = True   # raw RGB 独立 WebSocket，避免大包堵塞 compressed RGB
 
@@ -80,3 +81,6 @@ DEPTH_DECODE_INTERVAL_SEC = 0.2 # 本地最多 5Hz 解码深度，保护 RGB 流
 # ==================== 连接超时 ====================
 
 CONNECT_TIMEOUT = 10.0          # 连接超时 (秒)
+CAMERA_GUARD_ENABLED = True     # 相机任务启动前先检查 RealSense 图像流，必要时自动 restart
+CAMERA_GUARD_SAMPLE_TIMEOUT = 3.0
+CAMERA_GUARD_RESTART_WAIT = 10.0

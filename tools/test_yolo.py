@@ -18,6 +18,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from robot_grasp import config
+from robot_grasp.camera_guard import ensure_realsense_ready_on_client
 from robot_grasp.depth_utils import compute_grasp_point
 
 try:
@@ -190,20 +191,6 @@ def main():
     print("=" * 60)
     print()
 
-    # 加载 YOLO 模型
-    if YOLO_DEVICE == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError(
-            "CUDA 不可用，test_yolo 已拒绝退回 CPU。请先确认 nvidia-smi 和 "
-            "python -c \"import torch; print(torch.__version__, torch.cuda.is_available())\""
-        )
-    print("[*] 加载 YOLO 模型...")
-    model = YOLO(YOLO_MODEL)
-    model.to(YOLO_DEVICE)
-    print(f"[✓] 模型加载完成 ({YOLO_MODEL}, device={YOLO_DEVICE})")
-    # 预热：推理一次
-    model(np.zeros((480, 640, 3), dtype=np.uint8), conf=YOLO_CONF, device=YOLO_DEVICE, verbose=False)
-    print()
-
     # 连接机器人
     host = WS_URL.replace("ws://", "").split(":")[0]
     port = int(WS_URL.replace("ws://", "").split(":")[1])
@@ -222,6 +209,27 @@ def main():
             client.terminate()
             sys.exit(1)
         time.sleep(0.1)
+
+    ensure_realsense_ready_on_client(
+        client,
+        require_depth=True,
+        require_camera_info=True,
+        require_raw_rgb=False,
+    )
+
+    # 加载 YOLO 模型
+    if YOLO_DEVICE == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA 不可用，test_yolo 已拒绝退回 CPU。请先确认 nvidia-smi 和 "
+            "python -c \"import torch; print(torch.__version__, torch.cuda.is_available())\""
+        )
+    print("[*] 加载 YOLO 模型...")
+    model = YOLO(YOLO_MODEL)
+    model.to(YOLO_DEVICE)
+    print(f"[✓] 模型加载完成 ({YOLO_MODEL}, device={YOLO_DEVICE})")
+    # 预热：推理一次
+    model(np.zeros((480, 640, 3), dtype=np.uint8), conf=YOLO_CONF, device=YOLO_DEVICE, verbose=False)
+    print()
 
     subscriber = roslibpy.Topic(client, RGB_TOPIC, "sensor_msgs/CompressedImage")
     depth_subscriber = roslibpy.Topic(client, DEPTH_TOPIC, "sensor_msgs/CompressedImage")

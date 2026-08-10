@@ -11,6 +11,7 @@ Safety posture:
 from __future__ import annotations
 
 import argparse
+import builtins
 import csv
 import glob
 import json
@@ -59,9 +60,35 @@ DEFAULT_CAM2HEAD = os.path.join(
     "cam2head_vendor_new_20260803.json",
 )
 DEFAULT_LOCKED_TARGET = os.path.join(PROJECT_ROOT, "data", "mpc_locked_target_latest.json")
-DEFAULT_GRASP_OFFSET_X = -0.04
-DEFAULT_GRASP_OFFSET_Y = -0.10
-DEFAULT_GRASP_OFFSET_Z = 0.35
+GRASP_PROFILES = {
+    "legacy_no_orientation": os.path.join(PROJECT_ROOT, "data", "grasp_profile_legacy_no_orientation.json"),
+    "tuned_with_orientation": os.path.join(PROJECT_ROOT, "data", "grasp_profile_tuned_with_orientation.json"),
+}
+DEFAULT_GRASP_PROFILE = "tuned_with_orientation"
+_ORIGINAL_PRINT = builtins.print
+
+
+def _enable_quiet_print():
+    keep_patterns = (
+        "[✗]",
+        "[!]",
+        "[动作]",
+        "选择目标:",
+        "object base ",
+        "pregrasp",
+        "完整路径累计长度",
+        "末端到目标直线距离",
+        "[MPC] response:",
+        "[DRY RUN]",
+    )
+
+    def quiet_print(*args, **kwargs):
+        text = " ".join(str(arg) for arg in args)
+        if any(pattern in text for pattern in keep_patterns):
+            kwargs.setdefault("flush", True)
+            _ORIGINAL_PRINT(*args, **kwargs)
+
+    builtins.print = quiet_print
 
 
 def _parse_ws_url(ws_url: str) -> tuple[str, int]:
@@ -151,6 +178,31 @@ def _load_transform(path: str, name: str) -> np.ndarray:
 def _load_locked_target(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _load_grasp_profile(name: str) -> dict:
+    if name == "none":
+        return {}
+    path = GRASP_PROFILES.get(name)
+    if not path:
+        raise ValueError(f"unknown grasp profile: {name}")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _apply_grasp_profile(args) -> None:
+    profile = _load_grasp_profile(args.grasp_profile)
+    offset = profile.get("offset", {})
+    if args.offset_x is None:
+        args.offset_x = float(offset.get("x", 0.0))
+    if args.offset_y is None:
+        args.offset_y = float(offset.get("y", 0.0))
+    if args.offset_z is None:
+        args.offset_z = float(offset.get("z", 0.0))
+    if args.orientation_file is None and not args.stop_at_last_via:
+        args.orientation_file = profile.get("orientation_file")
+    if args.orientation_apply is None:
+        args.orientation_apply = profile.get("orientation_apply", "final")
 
 
 def _load_orientation_file(path: str) -> dict:
@@ -466,6 +518,10 @@ def _with_orientation(pose: dict, orientation: dict | None) -> dict:
     return target
 
 
+def _same_position(a: dict, b: dict, eps: float = 1e-6) -> bool:
+    return float(np.linalg.norm(_pose_position(a) - _pose_position(b))) <= eps
+
+
 def _orientation_array(pose: dict) -> np.ndarray:
     ori = pose["orientation"]
     return np.array([ori["x"], ori["y"], ori["z"], ori["w"]], dtype=float)
@@ -606,6 +662,13 @@ def _path_length(poses: list[dict]) -> float:
     return total
 
 
+def _execute_path_length(current_pose: dict, poses: list[dict]) -> float:
+    if not poses:
+        return 0.0
+    total = float(np.linalg.norm(_pose_position(poses[0]) - _pose_position(current_pose)))
+    return total + _path_length(poses)
+
+
 def _print_vec(label: str, vec: np.ndarray | tuple[float, float, float]):
     print(f"{label}: x={vec[0]: .4f} m, y={vec[1]: .4f} m, z={vec[2]: .4f} m")
 
@@ -635,39 +698,44 @@ def main():
                         help="Use a saved BASE target JSON instead of recomputing from CSV and current HEAD TF.")
     parser.add_argument("--tf-seconds", type=float, default=2.0)
     parser.add_argument("--timeout", type=float, default=5.0)
-    parser.add_argument("--connect-retries", type=int, default=1,
+    parser.add_argument("--connect-retries", type=int, default=3,
                         help="Retry rosbridge connection this many times before failing.")
     parser.add_argument("--connect-retry-delay", type=float, default=1.0,
                         help="Seconds to wait between rosbridge connection retries.")
+    parser.add_argument("--grasp-profile", choices=["none", *GRASP_PROFILES.keys()], default=DEFAULT_GRASP_PROFILE,
+                        help="Named grasp offset/orientation profile. Explicit offset/orientation args override it.")
     parser.add_argument(
         "--approach-height",
         "--above-object-height",
         dest="approach_height",
         type=float,
         default=0.10,
-        help="Final descend target height above the locked object point, in meters.",
+        help="Intermediate point height above the preset grasp point/object, in meters.",
     )
-    parser.add_argument("--safe-travel-z", type=float, default=0.95, help="Travel height before moving above the object.")
-    parser.add_argument("--no-auto-lift", action="store_true",
-                        help="Do not insert the automatic vertical lift before via/target points.")
+    parser.add_argument(
+        "--grasp-height",
+        type=float,
+        default=0.02,
+        help="Final preset grasp point height above the locked object point, in meters.",
+    )
     parser.add_argument("--include-descend", action="store_true", help="Also include the lower pre-grasp point. Default only moves above target at safe height.")
     parser.add_argument(
         "--offset-x",
         type=float,
-        default=DEFAULT_GRASP_OFFSET_X,
-        help="TCP x compensation from visual object point in BASE/MPC meters. Default -0.04m toward body.",
+        default=None,
+        help="TCP x compensation from visual object point in BASE/MPC meters. Defaults come from --grasp-profile.",
     )
     parser.add_argument(
         "--offset-y",
         type=float,
-        default=DEFAULT_GRASP_OFFSET_Y,
-        help="TCP y compensation from visual object point in BASE/MPC meters. Default -0.10m toward robot right.",
+        default=None,
+        help="TCP y compensation from visual object point in BASE/MPC meters. Defaults come from --grasp-profile.",
     )
     parser.add_argument(
         "--offset-z",
         type=float,
-        default=DEFAULT_GRASP_OFFSET_Z,
-        help="TCP z compensation from visual object point in BASE/MPC meters. Default 0.35m from teammate grasp test.",
+        default=None,
+        help="TCP z compensation from visual object point in BASE/MPC meters. Defaults come from --grasp-profile.",
     )
     parser.add_argument("--duration", type=float, default=8.0)
     parser.add_argument("--execute-delay", type=float, default=2.0,
@@ -680,8 +748,8 @@ def main():
                         help="Target TCP orientation quaternion in geometry_msgs order x y z w.")
     parser.add_argument("--orientation-file", default=None,
                         help="JSON saved by tools/capture_mpc_pose.py; uses its orientation.")
-    parser.add_argument("--orientation-apply", choices=["final", "all", "none"], default="final",
-                        help="How to apply target orientation. Default final avoids twisting during small step tests.")
+    parser.add_argument("--orientation-apply", choices=["final", "all", "prealign", "none"], default=None,
+                        help="How to apply target orientation. Defaults come from --grasp-profile.")
     parser.add_argument("--via-point", type=float, nargs=3, action="append", metavar=("X", "Y", "Z"),
                         help="Add an explicit MPC/BASE waypoint in meters. Can be repeated.")
     parser.add_argument("--via-file", action="append", default=None,
@@ -690,6 +758,8 @@ def main():
                         help="Stop the generated path at the last via waypoint instead of appending the visual target.")
     parser.add_argument("--use-joints", action="store_true",
                         help="Call /wa/points_seq_tracking_with_joints using mpc_state saved in each --via-file.")
+    parser.add_argument("--include-current-waypoint", action="store_true",
+                        help="Also send current pose/state as the first waypoint. Default false for --use-joints to avoid an initial re-projection twist.")
     parser.add_argument("--joint-weight", type=float, default=None,
                         help="Override weight when --use-joints is enabled. Default keeps --weight.")
     parser.add_argument("--step-distance", type=float, default=0.0,
@@ -703,7 +773,13 @@ def main():
     parser.add_argument("--max-z", type=float, default=1.20)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--confirm-target", action="store_true", help="Required together with --execute.")
+    parser.add_argument("--quiet", action="store_true", help="只打印关键结果和错误")
     args = parser.parse_args()
+
+    if args.quiet:
+        _enable_quiet_print()
+
+    _apply_grasp_profile(args)
 
     locked = _load_locked_target(args.use_locked_target) if args.use_locked_target else None
 
@@ -751,11 +827,12 @@ def main():
     _print_vec("camera point", point_cam)
     _print_vec("head point  ", point_head)
 
+    print("[动作] 连接 rosbridge 开始")
     client = _connect(args.ws_url, retries=args.connect_retries, retry_delay=args.connect_retry_delay)
-    print("\n[✓] 已连接 rosbridge")
+    print("[动作] 连接 rosbridge 完成")
     try:
         if not locked:
-            print(f"[*] 采样 TF {args.tf_seconds:.1f}s，查找 BASE -> HEAD")
+            print("[动作] 采样 TF/计算 BASE 目标开始")
             transforms = _sample_tf(client, args.tf_seconds)
             head_to_base = _lookup_transform(transforms, "BASE", "HEAD")
             if head_to_base is None:
@@ -764,11 +841,17 @@ def main():
                 raise SystemExit(1)
 
             object_base = _object_base_from_target(target, cam2head, head_to_base)
+            print("[动作] 采样 TF/计算 BASE 目标完成")
         pregrasp_position = object_base + np.array(
+            [args.offset_x, args.offset_y, args.grasp_height + args.offset_z],
+            dtype=float,
+        )
+        above_position = object_base + np.array(
             [args.offset_x, args.offset_y, args.approach_height + args.offset_z],
             dtype=float,
         )
         _print_vec("object base ", object_base)
+        _print_vec("above     ", above_position)
         _print_vec("pregrasp   ", pregrasp_position)
         if args.save_target:
             payload = {
@@ -787,19 +870,19 @@ def main():
         topic = FRAME_TOPICS[args.arm]
         hold_arm = "left" if args.arm == "right" else "right"
         hold_topic = FRAME_TOPICS[hold_arm]
-        print(f"\n[*] 读取当前 MPC 末端位姿: {topic}")
+        print("[动作] 读取当前/保持侧 MPC 末端位姿开始")
         message = _wait_for_pose(client, topic, args.timeout)
         if message is None:
             print(f"[✗] {args.timeout:.1f}s 内没有收到 {topic}")
             raise SystemExit(1)
-        print(f"[*] 读取保持不动侧 MPC 末端位姿: {hold_topic}")
         hold_message = _wait_for_pose(client, hold_topic, args.timeout)
         if hold_message is None:
             print(f"[✗] {args.timeout:.1f}s 内没有收到 {hold_topic}")
             raise SystemExit(1)
+        print("[动作] 读取当前/保持侧 MPC 末端位姿完成")
         current_mpc_state = None
         if args.use_joints:
-            print(f"[*] 读取当前 MPC joint state: {CURRENT_STATE_TOPIC}")
+            print("[动作] 读取 MPC joint state 开始")
             state_message = _wait_for_current_state(client, args.timeout)
             if state_message is None:
                 print(f"[✗] {args.timeout:.1f}s 内没有收到 {CURRENT_STATE_TOPIC}")
@@ -808,7 +891,7 @@ def main():
             if not current_mpc_state:
                 print("[✗] currenState 中没有 stateTrajectory[0].value")
                 raise SystemExit(1)
-            print(f"    joint_num={len(current_mpc_state)}")
+            print(f"[动作] 读取 MPC joint state 完成 joint_num={len(current_mpc_state)}")
         current_pose = _pose_stamped_to_pose(message)
         hold_pose = _pose_stamped_to_pose(hold_message)
         current_position = np.array(
@@ -819,19 +902,13 @@ def main():
             ],
             dtype=float,
         )
-        travel_z = max(float(args.safe_travel_z), float(current_position[2]), float(pregrasp_position[2]))
-        lift_position = current_position.copy()
-        lift_position[2] = travel_z
-        above_position = pregrasp_position.copy()
-        above_position[2] = travel_z
         orientation = _target_orientation(args)
 
-        poses = [current_pose]
-        joint_states = [current_mpc_state] if args.use_joints else None
-        if not args.no_auto_lift and float(np.linalg.norm(lift_position - current_position)) > 0.005:
-            poses.append(_with_position(current_pose, lift_position))
-            if joint_states is not None:
-                joint_states.append(current_mpc_state)
+        include_current_waypoint = bool(args.include_current_waypoint or not args.use_joints)
+        poses = [current_pose] if include_current_waypoint else []
+        joint_states = None
+        if args.use_joints:
+            joint_states = [current_mpc_state] if include_current_waypoint else []
         has_explicit_via = bool(args.via_point or args.via_file)
         if args.via_point:
             if args.use_joints:
@@ -862,17 +939,22 @@ def main():
         if not args.stop_at_last_via:
             poses.append(_with_position(current_pose, above_position))
             if joint_states is not None:
-                joint_states.append(joint_states[-1])
+                joint_states.append(joint_states[-1] if joint_states else current_mpc_state)
         if args.include_descend and not args.stop_at_last_via:
-            poses.append(_with_position(current_pose, pregrasp_position))
-            if joint_states is not None:
-                joint_states.append(joint_states[-1])
+            descend_pose = _with_position(current_pose, pregrasp_position)
+            if not poses or not _same_position(poses[-1], descend_pose):
+                poses.append(descend_pose)
+                if joint_states is not None:
+                    joint_states.append(joint_states[-1] if joint_states else current_mpc_state)
 
         full_target_pose = poses[-1]
         full_motion = _distance(current_pose, full_target_pose)
-        full_path_length = _path_length(poses)
+        full_path_length = _execute_path_length(current_pose, poses)
         planned_poses = json.loads(json.dumps(poses))
         reaches_full_target = True
+        if args.use_joints and not include_current_waypoint and args.step_distance > 0.0:
+            print("[✗] --use-joints 默认不发送当前点，暂不支持 --step-distance；请去掉 --step-distance 或加 --include-current-waypoint")
+            raise SystemExit(1)
         if args.step_distance > 0.0:
             if args.step_distance > args.max_motion + MOTION_EPS:
                 print(f"[✗] --step-distance {args.step_distance:.3f}m 不能大于 --max-motion {args.max_motion:.3f}m")
@@ -886,6 +968,22 @@ def main():
                 planned_poses = [planned_poses[0]] + [
                     _with_orientation(pose, orientation) for pose in planned_poses[1:]
                 ]
+            elif args.orientation_apply == "prealign":
+                if poses:
+                    first_target = _with_orientation(poses[0], orientation)
+                    first_planned = _with_orientation(planned_poses[0], orientation)
+                    if not _same_position(current_pose, poses[0]):
+                        poses = [_with_orientation(current_pose, orientation), *poses]
+                        planned_poses = [_with_orientation(current_pose, orientation), *planned_poses]
+                        if joint_states is not None:
+                            joint_states = [current_mpc_state, *joint_states]
+                    elif poses[0]["orientation"] != first_target["orientation"]:
+                        poses[0] = first_target
+                        planned_poses[0] = first_planned
+                    poses = [poses[0]] + [_with_orientation(pose, orientation) for pose in poses[1:]]
+                    planned_poses = [planned_poses[0]] + [
+                        _with_orientation(pose, orientation) for pose in planned_poses[1:]
+                    ]
             elif args.orientation_apply == "final":
                 planned_poses[-1] = _with_orientation(planned_poses[-1], orientation)
                 if reaches_full_target:
@@ -916,6 +1014,8 @@ def main():
             )
 
         motion = _distance(current_pose, target_pose)
+        execute_path_length = _execute_path_length(current_pose, poses)
+        print(f"[动作] 生成 MPC 路径完成 points={len(poses)}, length={execute_path_length:.3f}m")
         workspace_errors = []
         for idx, pose in enumerate(poses):
             pos = pose["position"]
@@ -983,7 +1083,7 @@ def main():
         if workspace_errors:
             print("[✗] 目标超出当前保守 workspace，取消执行")
             raise SystemExit(1)
-        execute_distance = _path_length(poses)
+        execute_distance = execute_path_length
         if execute_distance > args.max_motion + MOTION_EPS:
             print(f"[✗] 执行路径累计长度 {execute_distance:.4f}m > --max-motion {args.max_motion:.4f}m，取消执行")
             print("    先 dry-run 查看完整路径累计长度，再设置略大的 --max-motion。")
@@ -997,7 +1097,7 @@ def main():
             print(f"[✗] 找不到服务类型: {service_name}")
             raise SystemExit(1)
 
-        print(f"\n[EXECUTE] 即将调用 {service_name}。请确认手在急停上。")
+        print(f"[动作] 发送 MPC 轨迹开始 service={service_name}")
         if args.execute_delay > 0.0:
             print(f"          {args.execute_delay:.1f} 秒后发送，Ctrl+C 可取消。")
             time.sleep(args.execute_delay)
@@ -1006,6 +1106,7 @@ def main():
         try:
             response = _call(client, service_name, srv_type, request)
             print(f"[MPC] response: {response}")
+            print("[动作] 发送 MPC 轨迹完成")
         except ServiceException as exc:
             if not _print_mpc_target_manifest_hint(exc):
                 raise

@@ -20,13 +20,30 @@ analyze_perf.py              分析 grasp_data_*.csv 性能日志
 debug_cuda_env.py            检查 CUDA/PyTorch 环境
 debug_mpc_interfaces.py      检查 MPC 话题和服务
 debug_mpc_neck_control.py    检查 MPC neck/waist 相关服务
+debug_ocr_image.py           本地图片 OCR 调试
+debug_ocr_webcam.py          本地 USB 摄像头 OCR 调试
 debug_ros_streams.py         检查 rosbridge 图像流
 debug_select_target.py       从 CSV 中验证目标选择逻辑
 debug_vision_pipeline.py     单独调试视觉管线
 download_dataset.py          数据集下载辅助
 find_neck_srv_md5_candidate.py 查找 neck srv md5 候选
+label_ocr_dataset.py         半自动 OCR 数据标注
 robot_camera_demo.py         相机显示旧 demo
 run_mpc_points_dry_run.py    小位移 points_seq_tracking dry-run
 test_qr.py                   旧 QR 调试窗口
 test_topics.py               ROS topic 测试
+```
+
+OCR 标签裁剪调试示例：
+
+```bash
+python tools/debugs/debug_ocr_image.py data/qr_multiframe_debug/latest_raw/raw \
+  --label-crop \
+  --no-window \
+  --save-debug \
+  --debug-output data/ocr_label_debug/latest \
+  --upscale 4.0 \
+  --max-label-candidates 1 \
+  --label-expand-x 0.35 \
+  --label-expand-y 0.50
 ```

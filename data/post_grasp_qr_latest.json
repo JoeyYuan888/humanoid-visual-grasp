@@ -1,37 +1,44 @@
 {
-  "created_at": "2026-08-04 10:40:24",
+  "created_at": "2026-08-10 15:35:46",
+  "mode": "ocr_small",
   "frame_seq": 1,
-  "count": 1,
+  "count": 2,
   "texts": [
-    "KF2492858782"
+    "703肺科(2)病区",
+    "703肺科(2)病区"
   ],
   "detections": [
     {
-      "text": "KF2492858782",
-      "backend": "zxing-cpp",
-      "source": "full",
-      "center": [
-        750,
-        270
+      "text": "703肺科(2)病区",
+      "raw_text": "生院号：1303肺科(2)病区",
+      "confidence": 0.7381116449832916,
+      "backend": "rec(CPUExecutionProvider)",
+      "bbox": [
+        697,
+        230,
+        807,
+        261
       ],
-      "points": [
-        [
-          720.6666870117188,
-          246.0
-        ],
-        [
-          772.6666870117188,
-          242.0
-        ],
-        [
-          781.3333129882812,
-          295.3333435058594
-        ],
-        [
-          728.0,
-          299.3333435058594
-        ]
-      ]
+      "roi_index": 0,
+      "source": "",
+      "vote_count": null,
+      "raw_texts": []
+    },
+    {
+      "text": "703肺科(2)病区",
+      "raw_text": "生院号:133肺科(2)房区",
+      "confidence": 0.7784433173281806,
+      "backend": "rec(CPUExecutionProvider)",
+      "bbox": [
+        691,
+        225,
+        802,
+        256
+      ],
+      "roi_index": 1,
+      "source": "",
+      "vote_count": null,
+      "raw_texts": []
     }
   ]
 }

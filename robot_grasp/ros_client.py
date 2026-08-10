@@ -15,6 +15,7 @@ import cv2
 import roslibpy
 
 from . import config
+from .camera_guard import ensure_realsense_ready_on_client
 
 
 class ROSClient:
@@ -74,6 +75,18 @@ class ROSClient:
                 self._client.terminate()
                 return False
             time.sleep(0.1)
+
+        try:
+            ensure_realsense_ready_on_client(
+                self._client,
+                require_depth=config.ENABLE_DEPTH,
+                require_camera_info=config.ENABLE_DEPTH,
+                require_raw_rgb=config.ENABLE_QR,
+            )
+        except Exception as exc:
+            print(f"[✗] RealSense 图像流检查失败: {exc}")
+            self._client.terminate()
+            return False
 
         if config.ENABLE_DEPTH and config.USE_SEPARATE_DEPTH_CLIENT:
             self._depth_client = roslibpy.Ros(host=host, port=port)

@@ -1,0 +1,11 @@
+{
+  "name": "legacy_no_orientation",
+  "description": "Original plastic-bag grasp offsets without a fixed grasp orientation.",
+  "offset": {
+    "x": -0.04,
+    "y": -0.10,
+    "z": 0.35
+  },
+  "orientation_file": null,
+  "orientation_apply": "final"
+}

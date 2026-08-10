@@ -88,10 +88,23 @@ python tools/run_mpc_full_grasp_flow.py \
   --ws-url ws://192.168.20.98:9091 \
   --return-mode qr-present \
   --scan-qr-after-present \
+  --qr-transport raw \
+  --qr-raw-throttle-ms 3000 \
   --place-after-qr \
   --max-z 1.70 \
   --execute
 ```
+
+默认不弹出抓后 OCR/QR 识别窗口，流程结束后会自动退出。需要人工查看扫码窗口时再加 `--show-qr-window`。
+
+完整流程默认在低头锁存阶段启用轻量高光抑制，适配白色塑料袋过亮场景。需要回退原始图像检测时加：
+
+```bash
+--highlight-suppression none
+```
+
+完整流程默认启用右手指尖压力检查。若只是调试运动路径，可临时加
+`--disable-pressure-checks`，正式抓取不要关闭。
 
 视觉窗口检查：
 

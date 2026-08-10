@@ -13,6 +13,7 @@ Sequence:
 from __future__ import annotations
 
 import argparse
+import builtins
 import json
 import os
 import sys
@@ -29,7 +30,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from robot_grasp import config
-from robot_grasp.grasp_flow import object_conf, select_grasp_target, summarize_target
+from robot_grasp.grasp_flow import object_conf, summarize_target
 from robot_grasp.logger import DataLogger
 from robot_grasp.ros_client import ROSClient
 from robot_grasp.vision_pipeline import VisionPipeline
@@ -55,6 +56,28 @@ NECK_SERVICE = "/wa/wa_hardware_interface/neck_movej"
 MPC_MODE_SERVICE = "/wa/wa_hardware_interface/mpc_mode_setting"
 WAIST_LOCK_SERVICE = "/wa/waist_lock_setting"
 JOINT_STATES_TOPIC = "/zj_humanoid/upperlimb/joint_states"
+_ORIGINAL_PRINT = builtins.print
+
+
+def _enable_quiet_print():
+    keep_patterns = (
+        "[✗]",
+        "[!]",
+        "[阶段]",
+        "[动作]",
+        "[✓] 选择目标:",
+        "[✓] 已锁存 BASE 目标:",
+        "base  :",
+        "[✓] neck-only",
+    )
+
+    def quiet_print(*args, **kwargs):
+        text = " ".join(str(arg) for arg in args)
+        if any(pattern in text for pattern in keep_patterns):
+            kwargs.setdefault("flush", True)
+            _ORIGINAL_PRINT(*args, **kwargs)
+
+    builtins.print = quiet_print
 
 
 def _print_tf_debug(transforms: dict[tuple[str, str], dict]):
@@ -233,7 +256,7 @@ def _call_neck(client, neck_z: float, neck_y: float, duration: float, required: 
 
 def _make_vision_cleanup(pipeline: VisionPipeline, client: ROSClient,
                          show_window: bool, window_name: str):
-    def _cleanup():
+    def _cleanup(disconnect_client: bool = True):
         try:
             pipeline.stop()
         except Exception as exc:
@@ -244,6 +267,8 @@ def _make_vision_cleanup(pipeline: VisionPipeline, client: ROSClient,
                 cv2.waitKey(1)
             except Exception:
                 pass
+        if not disconnect_client:
+            return
         try:
             client.disconnect()
         except Exception as exc:
@@ -252,13 +277,218 @@ def _make_vision_cleanup(pipeline: VisionPipeline, client: ROSClient,
     return _cleanup
 
 
+def _target_xyz_m(target: dict) -> np.ndarray | None:
+    try:
+        return np.array([
+            float(target.get("x_mm")) / 1000.0,
+            float(target.get("y_mm")) / 1000.0,
+            float(target.get("z_mm")) / 1000.0,
+        ], dtype=float)
+    except (TypeError, ValueError):
+        return None
+
+
+def _valid_lock_candidates(object_results: list[dict], preferred_label: str | None) -> list[dict]:
+    candidates = []
+    for obj in object_results:
+        if preferred_label and obj.get("label") != preferred_label:
+            continue
+        if not obj.get("valid"):
+            continue
+        if object_conf(obj) < config.OBJECT_MIN_CONF:
+            continue
+        if _target_xyz_m(obj) is None:
+            continue
+        candidates.append(obj)
+    return candidates
+
+
+def _draw_selected_target(frame: np.ndarray, target: dict | None) -> np.ndarray:
+    if target is None:
+        return frame
+    bbox = target.get("bbox")
+    if not bbox or len(bbox) != 4:
+        return frame
+    try:
+        x1, y1, x2, y2 = [int(round(float(value))) for value in bbox]
+    except (TypeError, ValueError):
+        return frame
+    out = frame.copy()
+    color = (0, 0, 255)
+    cv2.rectangle(out, (x1, y1), (x2, y2), color, 4)
+    label = f"LOCK #{target.get('idx', '')} {target.get('label', '')}"
+    cv2.putText(
+        out,
+        label,
+        (max(0, x1), max(24, y1 - 10)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        color,
+        2,
+        cv2.LINE_AA,
+    )
+    return out
+
+
+def _suppress_highlights_mild(rgb: np.ndarray) -> np.ndarray:
+    """Conservative RGB highlight suppression for over-bright white bags."""
+    if rgb is None:
+        return rgb
+    lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+    l_channel, a_channel, b_channel = cv2.split(lab)
+
+    l_float = l_channel.astype(np.float32) / 255.0
+    # gamma > 1 darkens highlights slightly without changing geometry.
+    l_float = np.power(l_float, 1.12)
+    l_channel = np.clip(l_float * 255.0, 0, 255).astype(np.uint8)
+
+    highlight_mask = l_channel > 225
+    if np.any(highlight_mask):
+        compressed = 225 + (l_channel.astype(np.int16) - 225) * 0.35
+        l_channel = np.where(highlight_mask, compressed, l_channel).clip(0, 255).astype(np.uint8)
+
+    clahe = cv2.createCLAHE(clipLimit=1.2, tileGridSize=(8, 8))
+    l_channel = clahe.apply(l_channel)
+    processed = cv2.merge((l_channel, a_channel, b_channel))
+    return cv2.cvtColor(processed, cv2.COLOR_LAB2RGB)
+
+
+def _preprocess_lock_rgb(rgb: np.ndarray, mode: str) -> np.ndarray:
+    if mode == "mild":
+        return _suppress_highlights_mild(rgb)
+    return rgb
+
+
+class _StableTargetFilter:
+    """Reject one-off lock-stage false positives by requiring repeated 3D continuity."""
+
+    def __init__(self, min_hits: int, match_distance_m: float, max_missed: int,
+                 target_policy: str = "image_center"):
+        self.min_hits = max(1, int(min_hits))
+        self.match_distance_m = max(0.001, float(match_distance_m))
+        self.max_missed = max(0, int(max_missed))
+        self.target_policy = target_policy
+        self.tracks: list[dict] = []
+        self.frame_index = 0
+
+    @staticmethod
+    def _center_distance(target: dict, image_shape) -> float:
+        if image_shape is None:
+            return float("inf")
+        height, width = image_shape[:2]
+        center = target.get("center")
+        if not center or width <= 0 or height <= 0:
+            return float("inf")
+        try:
+            u = float(center[0])
+            v = float(center[1])
+        except (TypeError, ValueError, IndexError):
+            return float("inf")
+        target_u = width * 0.5
+        target_v = height * 0.75
+        dx = (u - target_u) / max(1.0, width)
+        dy = (v - target_v) / max(1.0, height)
+        return float((dx * dx + dy * dy) ** 0.5)
+
+    def update(self, candidates: list[dict], image_shape=None) -> dict | None:
+        self.frame_index += 1
+        matched_tracks: set[int] = set()
+
+        for candidate in sorted(candidates, key=object_conf, reverse=True):
+            xyz = _target_xyz_m(candidate)
+            if xyz is None:
+                continue
+
+            best_index = None
+            best_dist = None
+            for index, track in enumerate(self.tracks):
+                if index in matched_tracks:
+                    continue
+                if track["label"] != candidate.get("label"):
+                    continue
+                dist = float(np.linalg.norm(xyz - track["xyz"]))
+                if dist > self.match_distance_m:
+                    continue
+                if best_dist is None or dist < best_dist:
+                    best_dist = dist
+                    best_index = index
+
+            if best_index is None:
+                self.tracks.append({
+                    "label": candidate.get("label"),
+                    "xyz": xyz,
+                    "target": candidate,
+                    "hits": 1,
+                    "score_sum": object_conf(candidate),
+                    "last_seen": self.frame_index,
+                })
+                matched_tracks.add(len(self.tracks) - 1)
+                continue
+
+            track = self.tracks[best_index]
+            track["xyz"] = xyz
+            track["target"] = candidate
+            track["hits"] += 1
+            track["score_sum"] += object_conf(candidate)
+            track["last_seen"] = self.frame_index
+            matched_tracks.add(best_index)
+
+        self.tracks = [
+            track for track in self.tracks
+            if self.frame_index - track["last_seen"] <= self.max_missed
+        ]
+        stable_tracks = [track for track in self.tracks if track["hits"] >= self.min_hits]
+        if not stable_tracks:
+            return None
+        if self.target_policy == "highest_conf":
+            best_track = max(
+                stable_tracks,
+                key=lambda track: (
+                    track["hits"],
+                    track["score_sum"] / max(1, track["hits"]),
+                    object_conf(track["target"]),
+                ),
+            )
+        else:
+            best_track = min(
+                stable_tracks,
+                key=lambda track: (
+                    self._center_distance(track["target"], image_shape),
+                    -track["hits"],
+                    -object_conf(track["target"]),
+                ),
+            )
+        return best_track["target"]
+
+    def summary(self) -> str:
+        if not self.tracks:
+            return "no tracks"
+        parts = []
+        for track in sorted(self.tracks, key=lambda item: item["hits"], reverse=True):
+            xyz = track["xyz"]
+            parts.append(
+                f"{track['label']} hits={track['hits']} "
+                f"xyz=({xyz[0]:.3f},{xyz[1]:.3f},{xyz[2]:.3f})"
+            )
+        return "; ".join(parts[:4])
+
+
 def _run_vision(ws_url: str, seconds: float, preferred_label: str,
                 show_window: bool = False, window_name: str = "MPC Perception Lock",
-                frame_timeout: float = 5.0):
+                frame_timeout: float = 5.0, min_lock_hits: int = 3,
+                lock_match_distance_m: float = 0.12, lock_max_missed: int = 2,
+                lock_target_policy: str = "image_center",
+                highlight_suppression: str = "none"):
     logger = DataLogger()
     pipeline = VisionPipeline()
     client = ROSClient(ws_url=ws_url)
     cleanup = _make_vision_cleanup(pipeline, client, show_window, window_name)
+    stable_filter = _StableTargetFilter(
+        min_hits=min_lock_hits,
+        match_distance_m=lock_match_distance_m,
+        max_missed=lock_max_missed,
+        target_policy=lock_target_policy,
+    )
     latest_result = None
     best_target = None
     start = time.time()
@@ -297,8 +527,9 @@ def _run_vision(ws_url: str, seconds: float, preferred_label: str,
         sample_frames += 1
         total_frames += 1
         raw_rgb, _, raw_rgb_updated_at = client.get_raw_rgb()
+        detect_rgb = _preprocess_lock_rgb(rgb, highlight_suppression)
         result = pipeline.process(
-            rgb=rgb,
+            rgb=detect_rgb,
             depth=depth,
             cam_info=cam_info,
             frame_count=fc,
@@ -310,13 +541,16 @@ def _run_vision(ws_url: str, seconds: float, preferred_label: str,
         latest_result = result
         if result["should_detect"]:
             sample_detects += 1
-        target = select_grasp_target(result["object_results"], preferred_label=preferred_label)
+            candidates = _valid_lock_candidates(result["object_results"], preferred_label=preferred_label)
+            target = stable_filter.update(candidates, image_shape=rgb.shape)
+        else:
+            target = None
         if target is not None and (
             best_target is None or object_conf(target) > object_conf(best_target)
         ):
             best_target = target
         if show_window:
-            cv2.imshow(window_name, result["annotated"])
+            cv2.imshow(window_name, _draw_selected_target(result["annotated"], target or best_target))
             if (cv2.waitKey(1) & 0xFF) == ord("q"):
                 print("[*] 用户提前结束视觉检测")
                 break
@@ -351,6 +585,8 @@ def _run_vision(ws_url: str, seconds: float, preferred_label: str,
         print("[*] 最后一帧 object_results:")
         for obj in latest_result["object_results"]:
             print(f"    {summarize_target(obj)}")
+        if best_target is None:
+            print(f"[!] 连续性过滤未通过: {stable_filter.summary()}")
     if best_target is not None:
         print(f"[✓] 选择目标: {summarize_target(best_target)}")
     return best_target, csv_path, cleanup
@@ -427,10 +663,24 @@ def main():
     parser.add_argument("--window-name", default="MPC Perception Lock")
     parser.add_argument("--frame-timeout", type=float, default=5.0,
                         help="视觉阶段等待首帧的最长时间；超时后保存空 CSV 并继续安全抬头")
+    parser.add_argument("--min-lock-hits", type=int, default=3,
+                        help="锁存目标至少需要连续匹配的有效检测次数，用于过滤偶发 FP")
+    parser.add_argument("--lock-match-distance", type=float, default=0.12,
+                        help="同一目标连续匹配的 3D 距离阈值，单位 m")
+    parser.add_argument("--lock-max-missed", type=int, default=2,
+                        help="连续性过滤允许目标短暂丢失的检测次数")
+    parser.add_argument("--lock-target-policy", choices=["image_center", "highest_conf"], default="image_center",
+                        help="多个稳定目标的选择策略；默认 image_center：选择最靠近画面下半部中点的目标")
+    parser.add_argument("--highlight-suppression", choices=["none", "mild"], default="none",
+                        help="锁存阶段可选轻量高光抑制；默认 none，mild 用于白色塑料袋过曝时测试")
     parser.add_argument("--neck-only", action="store_true", help="只执行 neck down/home，不运行视觉检测")
     parser.add_argument("--skip-neck-down", action="store_true")
     parser.add_argument("--skip-neck-home", action="store_true")
+    parser.add_argument("--quiet", action="store_true", help="只打印关键结果和错误")
     args = parser.parse_args()
+
+    if args.quiet:
+        _enable_quiet_print()
 
     if args.allow_cpu_detect:
         config.REQUIRE_CUDA = False
@@ -463,6 +713,7 @@ def main():
 
         if not args.skip_neck_down:
             if args.neck_backend == "mpc":
+                print("[动作] 低头开始")
                 _call_neck(
                     control_client,
                     args.neck_down_z,
@@ -471,17 +722,21 @@ def main():
                     verify=args.verify_neck,
                     tolerance=args.neck_verify_tolerance,
                 )
+                print("[动作] 低头完成")
             else:
                 print("[manual] 请人工确认头部已低头到检测姿态")
             time.sleep(args.settle_seconds)
 
         low_head_to_base = None
         if not args.neck_only:
+            print("[动作] 锁存准备: 采样低头 TF")
             low_head_to_base = _sample_head_to_base(control_client, args.tf_seconds)
+            print("[动作] 锁存准备完成")
 
         if args.neck_only:
             print("[*] neck-only 模式：跳过视觉检测，只执行未被 skip 的 neck 动作")
         else:
+            print("[动作] 视觉识别开始")
             target, csv_path, vision_cleanup = _run_vision(
                 args.ws_url,
                 args.detect_seconds,
@@ -489,10 +744,17 @@ def main():
                 show_window=args.show_window,
                 window_name=args.window_name,
                 frame_timeout=args.frame_timeout,
+                min_lock_hits=args.min_lock_hits,
+                lock_match_distance_m=args.lock_match_distance,
+                lock_max_missed=args.lock_max_missed,
+                lock_target_policy=args.lock_target_policy,
+                highlight_suppression=args.highlight_suppression,
             )
             if target is None or csv_path is None:
                 raise RuntimeError("没有检测到 valid 目标，未锁存 BASE 坐标")
+            print("[动作] 视觉识别完成")
 
+            print("[动作] 坐标转换/锁存开始")
             _lock_target(
                 control_client=control_client,
                 target=target,
@@ -503,6 +765,7 @@ def main():
                 approach_height=args.approach_height,
                 head_to_base=low_head_to_base,
             )
+            print("[动作] 坐标转换/锁存完成")
 
         if args.neck_only:
             print("[✓] neck-only 模式完成，未运行视觉检测")
@@ -515,6 +778,7 @@ def main():
         if not args.skip_neck_home:
             try:
                 if args.neck_backend == "mpc":
+                    print("[动作] 抬头开始")
                     _call_neck(
                         control_client,
                         args.neck_home_z,
@@ -523,6 +787,7 @@ def main():
                         verify=args.verify_neck,
                         tolerance=args.neck_verify_tolerance,
                     )
+                    print("[动作] 抬头完成")
                 else:
                     print("[manual] 请人工确认头部已复位")
             except Exception as home_exc:
@@ -530,12 +795,22 @@ def main():
                     print(f"[!] 主流程已失败，尝试 neck home 也失败: {home_exc}")
                 else:
                     raise
-        if vision_cleanup is not None:
-            vision_cleanup()
-        try:
-            control_client.terminate()
-        except Exception:
-            pass
+        if primary_error is None:
+            if vision_cleanup is not None:
+                vision_cleanup(disconnect_client=False)
+            try:
+                cv2.destroyAllWindows()
+                cv2.waitKey(1)
+            except Exception:
+                pass
+            os._exit(0)
+        else:
+            if vision_cleanup is not None:
+                vision_cleanup()
+            try:
+                control_client.terminate()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
