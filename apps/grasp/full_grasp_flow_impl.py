@@ -759,6 +759,15 @@ def _estimate_step_total(args) -> int:
 
     if args.return_mode == "via3":
         total += 1
+    elif args.return_mode == "via1":
+        if args.scan_qr_after_present:
+            total += 1
+            total += 0 if args.disable_pressure_checks else 1
+            total += 1
+            total += 0 if args.disable_pressure_checks else 1
+            total += 1
+        else:
+            total += 1
     elif args.return_mode == "via0":
         total += 1
     elif args.return_mode == "qr-present":
@@ -819,7 +828,7 @@ def main():
                         help="Retry rosbridge connection for each MPC child step.")
     parser.add_argument("--connect-retry-delay", type=float, default=1.0,
                         help="Seconds to wait between rosbridge connection retries.")
-    parser.add_argument("--return-mode", choices=["none", "via3", "via0", "qr-present"], default="via3")
+    parser.add_argument("--return-mode", choices=["none", "via3", "via1", "via0", "qr-present"], default="via3")
     parser.add_argument("--qr-present-file", default=os.path.join("data", "poses", "mpc_qr_present_pose_right.json"),
                         help="MPC pose captured at the post-grasp QR presentation position.")
     parser.add_argument("--scan-qr-after-present", action="store_true",
@@ -949,6 +958,13 @@ def main():
                     args.execute,
                 )
                 break
+            if args.return_mode == "via1" and not args.scan_qr_after_present:
+                _run_step(
+                    "抓取后 via3 -> via2 -> via1",
+                    _via_cmd(args, [via3, via2, via1], args.return_max_motion, use_joints=True),
+                    args.execute,
+                )
+                break
             if args.return_mode == "via0":
                 _run_step(
                     "抓取后 via3 -> via2 -> via1 -> via0",
@@ -956,7 +972,7 @@ def main():
                     args.execute,
                 )
                 break
-            if args.return_mode != "qr-present":
+            if args.return_mode not in ("qr-present", "via1"):
                 print("[*] return-mode=none，抓取后保持当前位置")
                 break
 
@@ -1005,6 +1021,10 @@ def main():
                     _call_hand_open(args, hand_client)
                     _return_via1_to_via0(args, via0, via1)
                     raise SystemExit("[✗] 扫码后压力不足，重试后仍失败")
+
+            if args.return_mode == "via1":
+                _recover_to_via1(args, current, via1, via2, via3)
+                break
 
             if args.place_after_qr:
                 _run_step(

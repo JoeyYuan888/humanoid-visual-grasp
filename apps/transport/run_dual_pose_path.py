@@ -129,6 +129,25 @@ def _deep_pose(pose: dict) -> dict:
     return copy.deepcopy(pose)
 
 
+def _parse_slice(value: str) -> slice:
+    parts = value.split(":")
+    if len(parts) != 2:
+        raise ValueError(f"slice 格式应为 start:end，收到: {value}")
+    return slice(int(parts[0]), int(parts[1]))
+
+
+def _merge_current_right_arm_state(
+    target_state: list[float],
+    current_state: list[float],
+    right_joint_slice: slice,
+) -> list[float]:
+    if len(target_state) != len(current_state):
+        raise RuntimeError(f"joint state 长度不一致: target={len(target_state)} current={len(current_state)}")
+    merged = [float(v) for v in target_state]
+    merged[right_joint_slice] = [float(v) for v in current_state[right_joint_slice]]
+    return merged
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay captured dual-arm MPC pose path.")
     parser.add_argument("--ws-url", default="ws://192.168.20.102:9091")
@@ -138,6 +157,16 @@ def main() -> None:
     parser.add_argument("--max-motion", type=float, default=2.0, help="Max cumulative path length per arm.")
     parser.add_argument("--type", default="quintic", choices=["quintic", "cubic"])
     parser.add_argument("--use-joints", action="store_true", help="Use saved mpc_state from target files.")
+    parser.add_argument(
+        "--hold-right-current",
+        action="store_true",
+        help="Keep current right TCP pose and right-arm joints while applying left/body joints from targets.",
+    )
+    parser.add_argument(
+        "--right-joint-slice",
+        default="11:19",
+        help="Right-arm joint index slice in MPC state. Default 11:19 for WA dual-arm state.",
+    )
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
 
@@ -147,6 +176,8 @@ def main() -> None:
     print("=" * 70)
     print(f"  WebSocket: {args.ws_url}")
     print(f"  Targets: {', '.join(os.path.relpath(t['_path'], PROJECT_ROOT) for t in targets)}")
+    if args.hold_right_current:
+        print(f"  Hold right current: True, right joint slice={args.right_joint_slice}")
     print(f"  Execute: {args.execute}")
     print("=" * 70)
 
@@ -154,20 +185,29 @@ def main() -> None:
     try:
         print("[动作] 读取当前双臂 MPC pose 开始")
         left_poses = [_current_pose(client, "left", 5.0)]
-        right_poses = [_current_pose(client, "right", 5.0)]
+        current_right_pose = _current_pose(client, "right", 5.0)
+        right_poses = [current_right_pose]
         states: list[list[float]] = []
+        current_mpc_state: list[float] | None = None
+        right_joint_slice = _parse_slice(args.right_joint_slice)
         if args.use_joints:
             print("[动作] 读取当前 MPC joint state 开始")
-            states.append(_current_state(client, 5.0))
+            current_mpc_state = _current_state(client, 5.0)
+            states.append(current_mpc_state)
 
         for target in targets:
             left_poses.append(_deep_pose(target["left"]["pose"]))
-            right_poses.append(_deep_pose(target["right"]["pose"]))
+            right_poses.append(_deep_pose(current_right_pose if args.hold_right_current else target["right"]["pose"]))
             if args.use_joints:
                 state = target.get("mpc_state")
                 if not state:
                     raise RuntimeError(f"{target['_path']} 没有 mpc_state，不能 --use-joints")
-                states.append([float(v) for v in state])
+                target_state = [float(v) for v in state]
+                if args.hold_right_current:
+                    if current_mpc_state is None:
+                        raise RuntimeError("内部错误: missing current_mpc_state")
+                    target_state = _merge_current_right_arm_state(target_state, current_mpc_state, right_joint_slice)
+                states.append(target_state)
         print(f"[动作] 生成双臂路径完成 points={len(left_poses)}")
 
         left_len = _path_length(left_poses)

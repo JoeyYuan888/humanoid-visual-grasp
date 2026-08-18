@@ -1,5 +1,61 @@
-# Reserved for standalone placement stage configuration.
+# Placement stage configuration.
 
-enabled: false
-place_height_m: null
+enabled: true
+
+apriltag:
+  family: "tag36h11"
+  size_m: 0.020
+  shelf_levels:
+    2:
+      tag_id: 2
+      neck_y: 0.40
+    3:
+      tag_id: 3
+      neck_y: 0.25
+
+left_pull:
+  # Measured 2026-08-18 from:
+  #   data/runtime/place_apriltag_target_latest.json
+  #   data/poses/place/place_left_pull_grasp_dual.json
+  locked_tag: "data/runtime/place_apriltag_target_latest.json"
+  pull_grasp_pose: "data/poses/place/place_left_pull_grasp_dual.json"
+  offset_m:
+    x: -0.0819
+    y: -0.0180
+    z: 0.4883
+  approach_above_height_m: 0.12
+  final_above_height_m: 0.00
+  pull_out_distance_m: 0.20
+  push_back_distance_m: 0.21
+  pulled_offset_m:
+    x: -0.2819
+    y: -0.0180
+    z: 0.4883
+  pushed_offset_m:
+    x: -0.0719
+    y: -0.0180
+    z: 0.4883
+  release_offset_m:
+    x: -0.0819
+    y: -0.0180
+    z: 0.4883
+  approach_duration_s: 6.0
+  descend_duration_s: 3.0
+  pull_duration_s: 5.0
+  push_duration_s: 5.0
+  retreat_duration_s: 4.0
+  hand_grasp_q: [-0.5, 1.2, 0.5, 0.6, 0.6, 0.6]
+  hand_home_q: [-0.1, 0.05, 0.35, 0.35, 0.35, 0.35]
+
+right_drop:
+  # Right hand keeps current orientation. Left hand TCP must stay fixed.
+  mid_pose: "data/poses/place/place_right_drop_mid_dual.json"
+  drop_offset_m:
+    x: -0.1819
+    y: -0.0680
+    z: 0.6883
+  drop_duration_s: 5.0
+  return_duration_s: 5.0
+  hand_open_q: [-0.1, 0.05, 0.35, 0.35, 0.35, 0.35]
+
 retreat_mode: via3_via2_via1_via0

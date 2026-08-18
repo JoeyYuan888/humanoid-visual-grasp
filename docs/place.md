@@ -32,6 +32,25 @@ Tag size   : 20 mm = 0.020 m
 
 ## 当前规划流程
 
+当前放置流程已完整跑通，参数固定。正常入口：
+
+```bash
+python apps/place/run_place_flow.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --shelf-level 2 \
+  --execute-delay 0 \
+  --execute
+```
+
+默认固定参数来自 `configs/place.yaml` 和以下 pose 文件：
+
+```text
+data/poses/place/place_ready_after_grasp_dual.json
+data/poses/place/place_left_pull_mid_dual.json
+data/poses/place/place_left_pull_grasp_dual.json
+data/poses/place/place_right_drop_mid_dual.json
+```
+
 ```text
 右手持塑料袋，人工移动机器人到货架放置点
 -> MPC running mode
@@ -43,12 +62,24 @@ Tag size   : 20 mm = 0.020 m
 -> 左手到拉箱预抓取点
 -> 左手接近箱子前沿/把手
 -> 左手向身体侧拉出箱子
--> 右手到箱口上方
--> 右手下降到投放点
+-> 右手经 place_right_drop_mid_dual 到投放点
 -> 右手松开塑料袋
--> 右手撤回
--> 左手推回箱子
--> 双臂回安全/下垂姿态
+-> 右手经 place_right_drop_mid_dual 原路返回预放置姿态
+-> 左手推回箱子并多推 1cm
+-> 左手回拉 1cm、上抬 12cm
+-> 左手手指 home
+-> 左手经 place_left_pull_mid_dual 返回预放置姿态
+```
+
+除非重新贴 AprilTag、换箱子结构、重录示教点或现场碰撞风险改变，否则不要调整以下核心参数：
+
+```text
+左手拉箱抓取点 offset : x=-0.0819, y=-0.0180, z=0.4883
+左手拉出点 offset     : x=-0.2819, y=-0.0180, z=0.4883
+左手推回多推点 offset : x=-0.0719, y=-0.0180, z=0.4883
+左手脱离回拉点 offset : x=-0.0819, y=-0.0180, z=0.4883
+右手投放点 offset     : x=-0.1819, y=-0.0680, z=0.6883
+左手上方安全高度      : 0.12m
 ```
 
 ## 第一步任务
@@ -103,6 +134,217 @@ Tag -> 左手拉出距离
 Tag -> 右手箱口上方点
 Tag -> 右手投放点
 Tag -> 推回终点
+```
+
+## 已验证：左手拉箱接近参数
+
+2026-08-18 实测，二层 `id=2` AprilTag 锁存后，左手示教到“虎口向下扣住箱子前沿”的 TCP pose：
+
+```text
+data/poses/place/place_left_pull_grasp_dual.json
+```
+
+由该 TCP pose 减去 AprilTag BASE pose 得到固定偏移：
+
+```text
+offset_x = -0.0819 m
+offset_y = -0.0180 m
+offset_z = +0.4883 m
+```
+
+左手 orientation 使用 `place_left_pull_grasp_dual.json` 里的 `left.pose.orientation`，不要保持默认手腕姿态：
+
+```text
+x =  0.2964303933275394
+y = -0.32462723860067083
+z = -0.7009908789469625
+w =  0.5615674184845025
+```
+
+左手手指参数：
+
+```bash
+# 扣住/拉箱手型
+rosservice call /zj_humanoid/hand/joint_switch/left "{q: [-0.5, 1.2, 0.5, 0.6, 0.6, 0.6]}"
+
+# 左手 home/张开
+rosservice call /zj_humanoid/hand/joint_switch/left "{q: [-0.1, 0.05, 0.35, 0.35, 0.35, 0.35]}"
+```
+
+当前已验证的动作分解：
+
+```text
+place_ready_after_grasp_dual
+-> 左手到 tag + offset + 上方 12cm
+-> 左手切换扣住/拉箱手型
+-> 左手下降到 tag + offset，即示教拉出点
+```
+
+到拉出点上方 12cm：
+
+```bash
+python apps/place/run_left_pull_approach.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --locked-tag data/runtime/place_apriltag_target_latest.json \
+  --offset-x -0.0819 \
+  --offset-y -0.0180 \
+  --z-offset 0.4883 \
+  --above-height 0.12 \
+  --duration 6.0 \
+  --max-motion 1.2 \
+  --execute-delay 2.0 \
+  --execute
+```
+
+下降到拉出点：
+
+```bash
+python apps/place/run_left_pull_approach.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --locked-tag data/runtime/place_apriltag_target_latest.json \
+  --offset-x -0.0819 \
+  --offset-y -0.0180 \
+  --z-offset 0.4883 \
+  --above-height 0.00 \
+  --duration 3.0 \
+  --max-motion 0.2 \
+  --execute-delay 2.0 \
+  --execute
+```
+
+拉出箱子 20cm，现场已验证可用：
+
+```bash
+python apps/place/run_left_pull_approach.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --locked-tag data/runtime/place_apriltag_target_latest.json \
+  --offset-x -0.2819 \
+  --offset-y -0.0180 \
+  --z-offset 0.4883 \
+  --above-height 0.00 \
+  --duration 5.0 \
+  --max-motion 0.3 \
+  --execute-delay 2.0 \
+  --execute
+```
+
+## 已验证：右手投放测试参数
+
+右手投放路径要求：
+
+```text
+左手正在拉住/拉出箱子，左手 TCP 不能移动。
+右手路径 = 当前右手 -> place_right_drop_mid_dual -> 投放点。
+右手到投放点后松开塑料袋。
+松开后，右手必须原路返回：投放点 -> place_right_drop_mid_dual -> place_ready_after_grasp_dual 的右手 pose。
+```
+
+当前右手投放点参数：
+
+```text
+offset_x = -0.1819   # 相对箱子前沿抓取点，往身体方向 10cm
+offset_y = -0.0680   # 往机器人右侧 5cm
+offset_z =  0.6883   # 相对 tag，等价于左手抓取 z + 20cm
+```
+
+运行右手到投放点：
+
+```bash
+python apps/place/run_right_drop_approach.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --locked-tag data/runtime/place_apriltag_target_latest.json \
+  --via-file data/poses/place/place_right_drop_mid_dual.json \
+  --offset-x -0.1819 \
+  --offset-y -0.0680 \
+  --z-offset 0.6883 \
+  --above-height 0.00 \
+  --duration 5.0 \
+  --max-motion 1.5 \
+  --execute-delay 0 \
+  --execute
+```
+
+右手松开：
+
+```bash
+rosservice call /zj_humanoid/hand/joint_switch/right "{q: [-0.1, 0.05, 0.35, 0.35, 0.35, 0.35]}"
+```
+
+右手原路返回预放置姿态：
+
+```bash
+python apps/place/run_right_drop_approach.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --via-file data/poses/place/place_right_drop_mid_dual.json \
+  --target-file data/poses/place/place_ready_after_grasp_dual.json \
+  --duration 5.0 \
+  --max-motion 1.5 \
+  --execute-delay 0 \
+  --execute
+```
+
+推回箱子并多推 1cm，目标 `offset_x=-0.0719`：
+
+```bash
+python apps/place/run_left_pull_approach.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --locked-tag data/runtime/place_apriltag_target_latest.json \
+  --offset-x -0.0719 \
+  --offset-y -0.0180 \
+  --z-offset 0.4883 \
+  --above-height 0.00 \
+  --duration 5.0 \
+  --max-motion 0.3 \
+  --execute-delay 2.0 \
+  --execute
+```
+
+推回后左手恢复路线：
+
+```text
+1. 因为推回比原拉出点多推了 1cm，先往身体侧回拉 1cm：offset_x -0.0719 -> -0.0819
+2. 从扣住点上抬 12cm：above-height 0.00 -> 0.12
+3. 收回到 place_ready_after_grasp_dual 或后续安全点
+```
+
+回拉 1cm：
+
+```bash
+python apps/place/run_left_pull_approach.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --locked-tag data/runtime/place_apriltag_target_latest.json \
+  --offset-x -0.0819 \
+  --offset-y -0.0180 \
+  --z-offset 0.4883 \
+  --above-height 0.00 \
+  --duration 3.0 \
+  --max-motion 0.2 \
+  --execute-delay 2.0 \
+  --execute
+```
+
+上抬 12cm：
+
+```bash
+python apps/place/run_left_pull_approach.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --locked-tag data/runtime/place_apriltag_target_latest.json \
+  --offset-x -0.0819 \
+  --offset-y -0.0180 \
+  --z-offset 0.4883 \
+  --above-height 0.12 \
+  --duration 4.0 \
+  --max-motion 0.3 \
+  --execute-delay 2.0 \
+  --execute
+```
+
+注意事项：
+
+```text
+1. `run_left_pull_approach.py` 默认读取 `data/poses/place/place_left_pull_grasp_dual.json` 的左手 orientation。
+2. 如果重新贴 AprilTag、换箱子或重摆机器人，需要重新锁存 tag；如果箱子前沿/标签相对位置变化，需要重新示教并重算 offset。
+3. 上方 12cm 已验证可用于先对齐手腕姿态，避免下降时推箱。
 ```
 
 ## 风险点

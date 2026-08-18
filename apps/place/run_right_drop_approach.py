@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Move the left hand above the shelf-box pull point derived from AprilTag.
+"""Move the right hand to a placement test point derived from AprilTag.
 
-This is a placement-stage probing tool. It keeps the right hand at its current
-MPC pose and sends only the left hand to a target derived from the locked
-AprilTag BASE pose.
+The left hand keeps its current TCP pose. This is used while the left hand is
+holding/pulling the box and must not move.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ import argparse
 import copy
 import json
 import math
-import os
 import sys
 import time
 from pathlib import Path
@@ -37,20 +35,6 @@ from apps.place.run_apriltag_lock import MPC_MODE_SERVICE  # noqa: E402
 
 
 DEFAULT_LOCKED_TAG = PROJECT_ROOT / "data" / "runtime" / "place_apriltag_target_latest.json"
-DEFAULT_ORIENTATION_FILE = PROJECT_ROOT / "data" / "poses" / "place" / "place_left_pull_grasp_dual.json"
-LEFT_BEFORE_PULL_POSE = {
-    "position": {
-        "x": 0.08710145673233279,
-        "y": 0.3471696009177028,
-        "z": 0.7544225941912245,
-    },
-    "orientation": {
-        "x": 0.12029625113511888,
-        "y": -0.10029329205731499,
-        "z": -0.03516688605844088,
-        "w": 0.9870326021242131,
-    },
-}
 
 
 def _load_locked_tag(path: Path) -> dict[str, Any]:
@@ -62,18 +46,16 @@ def _load_locked_tag(path: Path) -> dict[str, Any]:
     return data
 
 
-def _load_left_orientation(path: Path | None) -> dict[str, float] | None:
-    if path is None:
-        return None
+def _load_right_pose(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
     if data.get("type") == "dual_arm_mpc_pose":
-        orientation = data.get("left", {}).get("pose", {}).get("orientation")
+        pose = data.get("right", {}).get("pose")
     else:
-        orientation = data.get("orientation")
-    if not orientation:
-        raise ValueError(f"{path} 没有 left.pose.orientation 或 orientation")
-    return {key: float(orientation[key]) for key in ("x", "y", "z", "w")}
+        pose = data.get("pose")
+    if not pose or "position" not in pose or "orientation" not in pose:
+        raise ValueError(f"{path} 没有 right.pose 或 pose")
+    return copy.deepcopy(pose)
 
 
 def _current_pose(client, arm: str, timeout: float) -> dict:
@@ -97,25 +79,22 @@ def _path_length(poses: list[dict]) -> float:
     return sum(_distance(a, b) for a, b in zip(poses, poses[1:]))
 
 
-def _build_left_target(
+def _build_right_target(
     locked_tag: dict[str, Any],
-    current_left: dict,
+    current_right: dict,
     *,
     offset_x: float,
     offset_y: float,
     z_offset: float,
     above_height: float,
-    orientation: dict[str, float] | None,
 ) -> dict:
     tag_position = locked_tag["base"]["tag_pose"]["position"]
-    target = copy.deepcopy(current_left)
+    target = copy.deepcopy(current_right)
     target["position"] = {
         "x": float(tag_position["x"]) + float(offset_x),
         "y": float(tag_position["y"]) + float(offset_y),
         "z": float(tag_position["z"]) + float(z_offset) + float(above_height),
     }
-    if orientation is not None:
-        target["orientation"] = copy.deepcopy(orientation)
     return target
 
 
@@ -123,8 +102,8 @@ def _build_request(left_poses: list[dict], right_poses: list[dict], duration: fl
     return {
         "left_poses": _pose_array(left_poses),
         "right_poses": _pose_array(right_poses),
-        "time_points": [duration for _ in left_poses],
-        "max_period": duration * len(left_poses) + 2.0,
+        "time_points": [duration for _ in right_poses],
+        "max_period": duration * len(right_poses) + 2.0,
         "weight": 1.0,
         "type": way_type,
     }
@@ -141,64 +120,63 @@ def _set_mpc_mode(client, enabled: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Move left hand above AprilTag-derived pull point.")
+    parser = argparse.ArgumentParser(description="Move right hand to AprilTag-derived placement point.")
     parser.add_argument("--ws-url", default="ws://192.168.20.102:9091")
     parser.add_argument("--locked-tag", type=Path, default=DEFAULT_LOCKED_TAG)
-    parser.add_argument("--offset-x", type=float, default=0.0, help="BASE x offset from tag. Negative moves toward body.")
-    parser.add_argument("--offset-y", type=float, default=0.0, help="BASE y offset from tag.")
-    parser.add_argument("--z-offset", type=float, default=0.05, help="Transport-consistent initial z offset.")
-    parser.add_argument("--above-height", type=float, default=0.10, help="Approach height above the pull point.")
+    parser.add_argument("--offset-x", type=float, default=None, help="BASE x offset from tag.")
+    parser.add_argument("--offset-y", type=float, default=None, help="BASE y offset from tag.")
+    parser.add_argument("--z-offset", type=float, default=None, help="BASE z offset from tag before above-height.")
+    parser.add_argument("--above-height", type=float, default=0.0)
     parser.add_argument(
-        "--orientation-file",
+        "--target-file",
         type=Path,
-        default=DEFAULT_ORIENTATION_FILE,
-        help="Pose JSON that provides left-hand orientation. Use --no-use-orientation to keep current orientation.",
+        default=None,
+        help="Optional pose JSON final target. Uses only right.pose; ignores tag offsets.",
     )
     parser.add_argument(
-        "--no-use-orientation",
-        action="store_true",
-        help="Keep current left-hand orientation instead of applying the recorded pull orientation.",
+        "--via-file",
+        type=Path,
+        action="append",
+        default=[],
+        help="Optional pose JSON waypoint. Uses only right.pose; left hand stays current.",
     )
-    parser.add_argument(
-        "--restore-before-pull",
-        action="store_true",
-        help="Restore only the left hand to the pose before the pull-point approach; keep right hand unchanged.",
-    )
-    parser.add_argument("--duration", type=float, default=6.0)
+    parser.add_argument("--duration", type=float, default=5.0)
     parser.add_argument("--execute-delay", type=float, default=2.0)
     parser.add_argument("--max-motion", type=float, default=1.2)
     parser.add_argument("--type", default="quintic", choices=["quintic", "cubic"])
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
 
-    locked_tag = None if args.restore_before_pull else _load_locked_tag(args.locked_tag)
-    tag = locked_tag.get("tag", {}) if locked_tag else {}
-    tag_position = locked_tag["base"]["tag_pose"]["position"] if locked_tag else None
-    orientation = None if args.restore_before_pull or args.no_use_orientation else _load_left_orientation(args.orientation_file)
+    if args.target_file is None:
+        if args.offset_x is None or args.offset_y is None or args.z_offset is None:
+            raise SystemExit("--target-file 未设置时必须提供 --offset-x/--offset-y/--z-offset")
+        locked_tag = _load_locked_tag(args.locked_tag)
+        tag = locked_tag.get("tag", {})
+        tag_position = locked_tag["base"]["tag_pose"]["position"]
+    else:
+        locked_tag = None
+        tag = {}
+        tag_position = None
 
     print("=" * 70)
-    print("  Place left-hand pull approach")
+    print("  Place right-hand drop approach")
     print("=" * 70)
     print(f"  WebSocket: {args.ws_url}")
-    if args.restore_before_pull:
-        print("  Mode: restore left hand before pull approach")
-    else:
+    if args.target_file is None:
         print(f"  Locked tag: {args.locked_tag}")
         print(f"  Tag: id={tag.get('selected_id')} level={tag.get('shelf_level')}")
         print(
             "  Base tag: "
             f"x={tag_position['x']:.4f}, y={tag_position['y']:.4f}, z={tag_position['z']:.4f}"
         )
-        print(f"  Offset: x={args.offset_x:.3f}, y={args.offset_y:.3f}, z={args.z_offset:.3f}")
+        print(f"  Offset: x={args.offset_x:.4f}, y={args.offset_y:.4f}, z={args.z_offset:.4f}")
         print(f"  Above height: {args.above_height:.3f} m")
-        if orientation is None:
-            print("  Orientation: keep current")
-        else:
-            print(
-                "  Orientation: "
-                f"x={orientation['x']:.4f}, y={orientation['y']:.4f}, "
-                f"z={orientation['z']:.4f}, w={orientation['w']:.4f}"
-            )
+    else:
+        print(f"  Target file: {args.target_file}")
+    if args.via_file:
+        print("  Right via files: " + ", ".join(str(path) for path in args.via_file))
+    print("  Orientation: keep current right hand")
+    print("  Left hand: hold current TCP pose")
     print(f"  Execute: {args.execute}")
     print("=" * 70)
 
@@ -209,28 +187,28 @@ def main() -> None:
         print("[动作] 读取当前左右手 MPC pose 开始")
         current_left = _current_pose(client, "left", 5.0)
         current_right = _current_pose(client, "right", 5.0)
-        if args.restore_before_pull:
-            target_left = copy.deepcopy(LEFT_BEFORE_PULL_POSE)
-        else:
-            target_left = _build_left_target(
+        if args.target_file is None:
+            target_right = _build_right_target(
                 locked_tag,
-                current_left,
+                current_right,
                 offset_x=args.offset_x,
                 offset_y=args.offset_y,
                 z_offset=args.z_offset,
                 above_height=args.above_height,
-                orientation=orientation,
             )
-        left_poses = [current_left, target_left]
-        right_poses = [current_right, current_right]
-        length = _path_length(left_poses)
+        else:
+            target_right = _load_right_pose(args.target_file)
+        right_waypoints = [_load_right_pose(path) for path in args.via_file]
+        left_poses = [current_left for _ in range(2 + len(right_waypoints))]
+        right_poses = [current_right, *right_waypoints, target_right]
+        length = _path_length(right_poses)
         print(
-            "目标左手: "
-            f"x={target_left['position']['x']:.4f}, "
-            f"y={target_left['position']['y']:.4f}, "
-            f"z={target_left['position']['z']:.4f}"
+            "目标右手: "
+            f"x={target_right['position']['x']:.4f}, "
+            f"y={target_right['position']['y']:.4f}, "
+            f"z={target_right['position']['z']:.4f}"
         )
-        print(f"左手路径长度: {length:.3f} m")
+        print(f"右手路径长度: {length:.3f} m")
         if length > args.max_motion:
             raise RuntimeError(f"路径长度 {length:.3f}m > --max-motion {args.max_motion:.3f}m")
 
