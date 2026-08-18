@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/hmit/naviai/plastic_crate_dual_grasp_foundationpose_20260814/foundationpose_cad/vendor/FoundationPose/mycpp/build_py310/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

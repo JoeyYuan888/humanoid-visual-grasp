@@ -1,0 +1,11 @@
+{
+  "name": "tuned_with_orientation",
+  "description": "Current tuned plastic-bag grasp profile: tuned x/z offsets and prealigned wrist orientation.",
+  "offset": {
+    "x": 0.045,
+    "y": -0.095,
+    "z": 0.35
+  },
+  "orientation_file": "data/poses/mpc_grasp_tuned_pose_right.json",
+  "orientation_apply": "prealign"
+}

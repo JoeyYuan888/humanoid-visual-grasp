@@ -1,0 +1,44 @@
+{
+  "object_name": "plastic_crate",
+  "source_files": ["../../塑料筐.stp", "../../塑料筐.obj"],
+  "source_unit": "millimeter",
+  "runtime_unit": "meter",
+  "source_material_ignored": true,
+  "dimensions_m": {
+    "length_x": 0.410,
+    "width_y": 0.270,
+    "height_z": 0.142
+  },
+  "coordinate_system": {
+    "handedness": "right-handed",
+    "origin": "bottom center",
+    "x_positive": "long side, right",
+    "y_positive": "short side, rear",
+    "z_positive": "bottom to opening",
+    "provisional_front_direction": "-Y"
+  },
+  "rim_point_order": [
+    "front_left",
+    "front_right",
+    "rear_right",
+    "rear_left"
+  ],
+  "rim_outer_m": [
+    [-0.205, -0.135, 0.142],
+    [0.205, -0.135, 0.142],
+    [0.205, 0.135, 0.142],
+    [-0.205, 0.135, 0.142]
+  ],
+  "rim_inner_m": [
+    [-0.195, -0.130, 0.142],
+    [0.195, -0.130, 0.142],
+    [0.195, 0.130, 0.142],
+    [-0.195, 0.130, 0.142]
+  ],
+  "geometry_symmetry": {
+    "z_axis_rotations_deg": [0, 180],
+    "front_back_is_geometrically_ambiguous": true
+  },
+  "mesh_file": "plastic_crate_m.obj",
+  "material_file": "plastic_neutral.mtl"
+}

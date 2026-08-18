@@ -1,0 +1,45 @@
+塑料框双短边抓取点定位项目交付清单
+====================================
+
+交付日期：2026-08-14
+项目目录：foundationpose_cad/
+主要入口：run_live.sh、run_live.py
+使用说明：README.md
+安装教程：INSTALL.md
+
+本压缩包以 /home/yons/test_plastic_crate/foundationpose_cad 的当前成功版本为来源。
+已在现有 RTX 4090 环境、RealSense 对齐 RGB-D 和 rosbridge 9091 端口上完成实时验证。
+
+包含：
+- 实时、离线和双短边抓取点源码
+- 塑料框运行用 OBJ、材质、尺寸和坐标元数据
+- 原始塑料筐 STP/OBJ，位于 source_cad/
+- 相机内参和颜色配置
+- 一组离线 RGB-D 样本
+- 固定版本 FoundationPose 源码、许可证、权重和当前 x86 扩展
+- 完整 README 和 RTX 40/RTX 50/Jetson Orin 安装教程
+
+有意排除：
+- outputs/ 实时及历史运行输出
+- __pycache__/ 和 *.pyc 缓存
+- vendor/FoundationPose/.git 版本库元数据
+- assets/fiducials_20mm/，它属于此前另一个 AprilTag/ArUco 项目
+
+重要兼容性说明：
+- 当前默认 Docker 环境已在 RTX 40 系列中的 RTX 4090 上验证。
+- RTX 50 不应直接复用 CUDA 12.1 镜像，应按 INSTALL.md 使用 CUDA 12.8+
+  并重新编译 PyTorch3D、nvdiffrast 和 mycpp。
+- Jetson Orin 是 aarch64，不能加载包内 x86_64/Python 3.8 的 mycpp 二进制，
+  必须在 Orin 本机按 INSTALL.md 重新编译。
+
+关键文件 SHA-256：
+b5ff9aa47c3204d2098407248c0aedc5c47d59a130dc26f96ae88cc3504386ab  assets/plastic_crate_m.obj
+774700586ddc435d408fc01c9809c43e151232936369dfbea0f0f964ba471d60  vendor/FoundationPose/weights/2023-10-28-18-33-37/model_best.pth
+9d10a2c59400428d0411371d8030d1e12c838898ade32cec168faf9f95a0b54a  vendor/FoundationPose/weights/2024-01-11-20-02-45/model_best.pth
+
+解压：
+tar -xzf plastic_crate_dual_grasp_foundationpose_20260814.tar.gz
+
+解压后请先阅读：
+foundationpose_cad/README.md
+foundationpose_cad/INSTALL.md

@@ -1,0 +1,6 @@
+# Reserved for navigation stage configuration.
+
+enabled: false
+map_frame: map
+base_frame: BASE
+arrival_tolerance_m: 0.10

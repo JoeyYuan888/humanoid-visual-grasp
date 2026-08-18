@@ -1,0 +1,14 @@
+realsense_head:
+  rgb_compressed_topic: /zj_humanoid/sensor/realsense_head/color/image_raw/compressed
+  rgb_raw_topic: /zj_humanoid/sensor/realsense_head/color/image_raw
+  depth_topic: /zj_humanoid/sensor/realsense_head/aligned_depth_to_color/image_raw
+  depth_compressed_topic: /zj_humanoid/sensor/realsense_head/aligned_depth_to_color/image_raw/compressedDepth
+  camera_info_topic: /zj_humanoid/sensor/realsense_head/color/camera_info
+  restart_service: /zj_humanoid/sensor/realsense_head/restart
+
+perception:
+  yolo_model: models/yolo/best.pt
+  cam2head: data/calibration/cam2head_vendor_new_20260803.json
+  highlight_suppression: mild
+  grasp_point_x_ratio: 0.50
+  grasp_point_y_ratio: 0.333

@@ -1,0 +1,5 @@
+# Reserved for standalone placement stage configuration.
+
+enabled: false
+place_height_m: null
+retreat_mode: via3_via2_via1_via0

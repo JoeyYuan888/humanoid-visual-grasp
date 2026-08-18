@@ -1,0 +1,27 @@
+# Current validated grasp parameters.
+# Not loaded by runtime code yet; kept as the canonical parameter reference.
+
+grasp_profile: tuned_with_orientation
+above_object_height: 0.10
+grasp_height: 0.02
+max_z: 1.70
+motion_duration: 5.0
+execute_delay: 0.0
+
+hand:
+  open: [-0.1, 0.05, 0.35, 0.35, 0.35, 0.35]
+  close: [0.5, 0.8, 0.84, 0.84, 0.35, 0.35]
+
+pressure_thresholds:
+  grasp: 0.0
+  carry: 0.05
+  qr: 0.0
+
+paths:
+  locked_target: data/runtime/mpc_locked_target_latest.json
+  qr_result: data/runtime/post_grasp_qr_latest.json
+  via0: data/poses/mpc_via0_home_right.json
+  via1: data/poses/mpc_via1_pose_right.json
+  via2: data/poses/mpc_via2_pose_right.json
+  via3: data/poses/mpc_via3_pose_right.json
+  qr_present: data/poses/mpc_qr_present_pose_right.json

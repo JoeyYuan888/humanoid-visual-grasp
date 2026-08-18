@@ -1,0 +1,8 @@
+# Neutral opaque plastic placeholder; original CAD/OBJ color is intentionally ignored.
+newmtl plastic_neutral
+Ka 0.080000 0.080000 0.080000
+Kd 0.550000 0.550000 0.550000
+Ks 0.080000 0.080000 0.080000
+Ns 80.000000
+d 1.000000
+illum 2

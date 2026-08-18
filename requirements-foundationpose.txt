@@ -1,0 +1,81 @@
+# FoundationPose native-conda dependency notes
+#
+# Purpose:
+# - Extra dependencies for integrating FoundationPose into the transport stage.
+# - Keep this file separate from requirements.txt until the FoundationPose
+#   transport path is fully merged and robot-tested.
+#
+# Baseline already verified:
+# - Python 3.10
+# - PyTorch 2.11.0+cu128
+# - RTX 5060 Laptop GPU
+# - NVIDIA driver 580.173.02
+# - CUDA runtime visible from torch
+#
+# Recommended install order:
+#
+# 1. Clone an existing working detect environment:
+#      conda create -n foundationpose_detect --clone detect -y
+#
+# 2. Install CUDA compile toolchain and CUDA dev libraries:
+#      conda install -n foundationpose_detect -c nvidia -c conda-forge --override-channels \
+#        cuda-nvcc_linux-64=12.8.93 cuda-libraries-dev=12.8.2 sysroot_linux-64 -y
+#
+# 3. Install a CUDA-compatible compiler stack. CUDA 12.8 rejects GCC >= 14:
+#      conda install -n foundationpose_detect -c conda-forge --override-channels \
+#        c-compiler cxx-compiler cmake ninja \
+#        "gcc_linux-64=13.*" "gxx_linux-64=13.*" \
+#        "gcc_impl_linux-64=13.*" "gxx_impl_linux-64=13.*" -y
+#
+# 4. Install C++/binding dependencies:
+#      conda install -n foundationpose_detect -c conda-forge --override-channels \
+#        eigen boost-cpp pybind11 -y
+#
+# 5. Install this pip requirement file inside the environment:
+#      conda activate foundationpose_detect
+#      pip install -r requirements-foundationpose.txt
+#
+# 6. Compile CUDA/PyTorch extension packages from source:
+#      export CUDA_HOME="$CONDA_PREFIX"
+#      export PATH="$CUDA_HOME/bin:$PATH"
+#      export TORCH_CUDA_ARCH_LIST="12.0"
+#      pip install --no-build-isolation git+https://github.com/NVlabs/nvdiffrast.git
+#      pip install --no-build-isolation git+https://github.com/facebookresearch/pytorch3d.git
+#
+# 7. Compile FoundationPose mycpp for Python 3.10:
+#      cd /path/to/foundationpose_cad/vendor/FoundationPose/mycpp
+#      mkdir -p build_py310
+#      cd build_py310
+#      cmake .. \
+#        -DCMAKE_BUILD_TYPE=Release \
+#        -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+#        -DPython3_ROOT_DIR="$CONDA_PREFIX"
+#      cmake --build . -j"$(nproc)"
+#      cp mycpp.cpython-310-*.so ../build/
+#
+# 8. Validate:
+#      cd /path/to/foundationpose_cad/vendor/FoundationPose
+#      python check_env.py
+#
+# Packages below are normal pip dependencies only. Source-built CUDA packages
+# are intentionally documented above instead of pinned here.
+
+trimesh>=5.0.0
+imageio>=2.37.0
+websocket-client>=1.9.0
+scikit-learn>=1.7.0
+open3d>=0.19.0
+kornia>=0.8.0
+omegaconf>=2.3.0
+warp-lang>=1.6.0
+pyrender==0.1.45
+PyOpenGL==3.1.0
+# PyOpenGL-accelerate is optional here. pyrender 0.1.45 pins PyOpenGL==3.1.0,
+# while newer PyOpenGL-accelerate wheels can force incompatible resolution.
+transformations>=2025.1.1
+joblib>=1.5.0
+h5py>=3.14.0
+psutil>=7.0.0
+ruamel.yaml>=0.18.0
+iopath>=0.1.10
+portalocker>=4.0.0

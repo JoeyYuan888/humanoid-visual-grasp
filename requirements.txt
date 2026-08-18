@@ -72,5 +72,6 @@ tzdata==2026.3
 ultralytics==8.4.115
 ultralytics-thop==2.1.6
 urllib3==2.7.0
+xlrd==2.0.2
 zope.interface==8.5
 zxing-cpp==3.1.1

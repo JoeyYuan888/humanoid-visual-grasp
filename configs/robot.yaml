@@ -1,0 +1,14 @@
+rosbridge:
+  default_ws_url: ws://192.168.20.102:9091
+  docker_container: huimin1.4
+  launch_command: roslaunch rosbridge_server rosbridge_websocket.launch port:=9091
+
+mpc:
+  points_service: /wa/points_seq_tracking
+  points_with_joints_service: /wa/points_seq_tracking_with_joints
+  mpc_mode_service: /wa/wa_hardware_interface/mpc_mode_setting
+  neck_service: /wa/wa_hardware_interface/neck_movej
+
+hand:
+  right_joint_switch_service: /zj_humanoid/hand/joint_switch/right
+  right_pressure_topic: /zj_humanoid/hand/finger_pressures/right

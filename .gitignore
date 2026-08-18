@@ -11,6 +11,16 @@ __pycache__/
 .env.*
 
 # Runtime data/logs
+data/runtime/
+data/place/*debug*/
+data/place/*latest.png
+data/place/*latest.json
+data/transport/*debug*/
+data/transport/*latest.png
+data/transport/*latest.json
+data/transport/*latest/
+data/qr_multiframe_debug/
+data/ocr_label_debug/
 data/grasp_data_*.csv
 data/qr_debug_*.csv
 data/qr_*_*.png
@@ -22,6 +32,10 @@ handeye_calibration/data/*.csv
 # Generated archives/source-drop copies; source folders are tracked instead.
 *.zip
 !ros_pkgs/archives/*.zip
+
+# Model files larger than GitHub's 100MB limit. Keep locally or use Git LFS.
+models/yolo/FastSAM-x.pt
+
 
 # Office temporary files
 .~lock.*

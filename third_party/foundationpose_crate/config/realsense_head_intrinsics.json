@@ -1,0 +1,43 @@
+{
+  "source": {
+    "rosbridge_url": "ws://192.168.20.102:9091",
+    "retrieved_at_local": "2026-08-13",
+    "color_camera_info_topic": "/zj_humanoid/sensor/realsense_head/color/camera_info",
+    "aligned_depth_camera_info_topic": "/zj_humanoid/sensor/realsense_head/aligned_depth_to_color/camera_info",
+    "color_topic": "/zj_humanoid/sensor/realsense_head/color/image_raw/compressed",
+    "aligned_depth_topic": "/zj_humanoid/sensor/realsense_head/aligned_depth_to_color/image_raw/compressedDepth"
+  },
+  "image": {
+    "width": 1280,
+    "height": 720,
+    "optical_frame_id": "realsense_head_color_optical_frame"
+  },
+  "distortion_model": "plumb_bob",
+  "distortion_coefficients": [0.0, 0.0, 0.0, 0.0, 0.0],
+  "K": [
+    [916.3634033203125, 0.0, 645.256103515625],
+    [0.0, 917.230224609375, 375.6018371582031],
+    [0.0, 0.0, 1.0]
+  ],
+  "projection_matrix_P": [
+    [916.3634033203125, 0.0, 645.256103515625, 0.0],
+    [0.0, 917.230224609375, 375.6018371582031, 0.0],
+    [0.0, 0.0, 1.0, 0.0]
+  ],
+  "aligned_depth": {
+    "format": "16UC1; compressedDepth png",
+    "stored_unit": "millimeter",
+    "meters_per_unit": 0.001,
+    "registered_to_color": true
+  },
+  "color": {
+    "format": "rgb8; jpeg compressed bgr8"
+  },
+  "verification_sample": {
+    "color_shape": [720, 1280, 3],
+    "color_dtype": "uint8",
+    "depth_shape": [720, 1280],
+    "depth_dtype": "uint16",
+    "color_depth_stamp_delta_seconds": 0.03376293182373047
+  }
+}

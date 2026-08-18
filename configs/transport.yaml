@@ -1,0 +1,28 @@
+# Reserved for box transport stage configuration.
+
+enabled: false
+
+box_detection:
+  model: color_segmentation_lab
+  preferred_label: box
+  min_confidence: 0.50
+  target_policy: center
+  blue_b_thresh: 105
+  l_min: 15
+  l_max: 250
+
+grasp_points:
+  # Current detector outputs left/right short-edge midpoints in camera frame.
+  left_offset_xyz_m: null
+  right_offset_xyz_m: null
+  approach_height_m: null
+
+two_hand_holding:
+  pressure_check: true
+  min_left_pressure: null
+  min_right_pressure: null
+
+motion:
+  use_mpc: true
+  use_joint_constraints: true
+  max_z_m: 1.70

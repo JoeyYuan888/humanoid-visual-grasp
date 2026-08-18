@@ -1,0 +1,45 @@
+{
+  "active_profile": "cyan_blue_green",
+  "minimum_component_area_pixels": 0,
+  "small_component_warning_below_pixels": 1000,
+  "morphology_kernel_pixels": 3,
+  "morphology_close_iterations": 2,
+  "profiles": {
+    "cyan_blue_green": {
+      "hsv_ranges": [
+        {"lower": [78, 55, 45], "upper": [110, 255, 255]}
+      ]
+    },
+    "blue": {
+      "hsv_ranges": [
+        {"lower": [100, 60, 40], "upper": [130, 255, 255]}
+      ]
+    },
+    "green": {
+      "hsv_ranges": [
+        {"lower": [35, 50, 40], "upper": [85, 255, 255]}
+      ]
+    },
+    "yellow": {
+      "hsv_ranges": [
+        {"lower": [18, 60, 60], "upper": [38, 255, 255]}
+      ]
+    },
+    "orange": {
+      "hsv_ranges": [
+        {"lower": [5, 80, 60], "upper": [22, 255, 255]}
+      ]
+    },
+    "red": {
+      "hsv_ranges": [
+        {"lower": [0, 70, 45], "upper": [10, 255, 255]},
+        {"lower": [170, 70, 45], "upper": [179, 255, 255]}
+      ]
+    },
+    "magenta": {
+      "hsv_ranges": [
+        {"lower": [135, 55, 45], "upper": [170, 255, 255]}
+      ]
+    }
+  }
+}
