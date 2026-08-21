@@ -93,7 +93,7 @@ body_offset    = -0.17 m   # BASE x 负方向，往身体 17cm；相比上一版
 side_z_offset  = 0.38 m    # 当前夹紧点上移 38cm；相比上一版下调 2cm
 motion_duration = 5.0 s
 side_motion_duration = 10.0 s   # 预抓取到两侧靠近点降速 50%
-carry_lift = 0.15 m             # 夹紧/手指补夹后抬高 15cm
+carry_lift = 0.30 m             # 夹紧/手指补夹后抬高 30cm
 carry_waist_joints = [-0.3, 0.3, 0.0, 0.0]  # 回收后设置 3-6 四个身体关节
 carry_pullback = -0.20 m        # 抬高后 BASE x 负方向回收 20cm
 ```
@@ -105,7 +105,7 @@ left_hand_q  = [0.2, 0.9, 0.35, 0.45, 0.56, 0.65]
 right_hand_q = [0.2, 0.9, 0.35, 0.45, 0.56, 0.65]
 ```
 
-当前主流程默认已自动执行手指补夹、抬高 15cm、往身体回收 20cm、调整腰部搬运姿态。调试时可用 `--skip-hand-adjust`、`--skip-carry-lift`、`--skip-carry-pullback` 跳过。
+当前主流程默认已自动执行手指补夹、抬高 30cm、往身体回收 20cm、调整腰部搬运姿态。调试时可用 `--skip-hand-adjust`、`--skip-carry-lift`、`--skip-carry-pullback` 跳过。
 
 搬运到目标货架/放置区域后，放箱并收回双臂：
 
@@ -120,12 +120,71 @@ python apps/transport/run_transport_place_return.py \
 ```text
 当前搬运姿态 -> data/poses/transport/transport_place_dual.json
 -> 双手复位/松开
--> data/runtime/transport_box_side_approach_latest.json
+-> 双手水平外扩 10cm，先离开箱子侧壁
+-> 双手上抬 12cm，避开箱子/桌面
 -> data/poses/transport/transport_pregrasp_dual.json
 -> data/poses/transport/transport_home_dual.json
 ```
 
-注意：`transport_place_dual.json` 是实际放置/夹紧点，已经去掉左右外扩偏移；`transport_box_side_approach_latest.json` 才是外扩退开点。
+注意：`transport_place_dual.json` 是实际放置/夹紧点，已经去掉左右外扩偏移；`transport_box_side_approach_latest.json` 是搬运抓取阶段的外扩点，放置 return 默认不再经过它，避免松手后往低处运动撞桌面。只有调试需要时才加 `--use-outside-retreat`。
+
+## 当前搬运总流程
+
+完整搬运链路从搬运开始点导航开始：
+
+```bash
+python apps/transport/run_transport_delivery_flow.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --show-window \
+  --execute
+```
+
+该入口把四段串起来：
+
+```text
+1. run_navigation_flow.py --goal transport_start_area
+   导航到底盘地图上的搬运开始点
+
+2. run_transport_flow.py
+   当前位置识别箱子、双手夹紧、补夹、抬高、回收
+
+3. run_navigation_flow.py --goal transport_place_area
+   导航到底盘地图上的搬运结束点
+
+4. run_transport_place_return.py
+   放下箱子、松手后先外扩再上抬、经 transport_pregrasp_dual 回 transport_home_dual
+```
+
+如果机器人已经由人工移动到搬运起点，跳过起点导航：
+
+```bash
+python apps/transport/run_transport_delivery_flow.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --show-window \
+  --skip-start-navigation \
+  --execute
+```
+
+只测试终点导航和放置/return：
+
+```bash
+python apps/transport/run_transport_delivery_flow.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --skip-transport \
+  --skip-start-navigation \
+  --execute
+```
+
+只测试搬运抓取，不导航、不放置：
+
+```bash
+python apps/transport/run_transport_delivery_flow.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --show-window \
+  --skip-navigation \
+  --skip-return \
+  --execute
+```
 
 如果导纳临时不可用，回退普通 points：
 
@@ -147,7 +206,7 @@ python apps/transport/run_transport_flow.py \
   --execute
 ```
 
-当前现场进度：导纳夹紧到 3cm 已验证，双手同步抬高 15cm、往身体回收 20cm、腰部姿态调整已并入主流程；搬运直腰姿态仍在优化。完整记录见 `docs/transport.md`。
+当前现场进度：导纳夹紧到 3cm 已验证，双手同步抬高 30cm、往身体回收 20cm、腰部姿态调整已并入主流程；搬运直腰姿态仍在优化。完整记录见 `docs/transport.md`。
 
 如果只想停在预抓取点：
 

@@ -5,20 +5,18 @@
 The current project goal is:
 
 ```text
-grasp -> transport -> navigation -> place
+transport -> navigation -> grasp -> place
 ```
 
-Only the `grasp` stage is implemented and validated today. `transport`,
-navigation, and standalone place stages are reserved here so the project can
-grow without mixing future code into the existing grasp scripts.
+Current validated operator entrypoints are split by business stage.
 
 ```text
-apps/grasp/       Current validated visual grasping entrypoints
-apps/transport/   Reserved for two-hand box transport
-apps/navigation/  Reserved for navigation planning and execution
-apps/place/       Reserved for standalone placement logic
+apps/grasp/       Plastic-bag grasp and post-grasp OCR/QR entrypoints
+apps/transport/   Two-hand box transport, transport navigation handoff, and return
+apps/navigation/  Basic map waypoint navigation
+apps/place/       Shelf AprilTag lock, box pull-out, bag drop, and box push-back
 ```
 
-Daily operation should use the entrypoints under `apps/grasp/`. `tools/`
-contains reusable one-off utilities for calibration, capture, debugging, and
-low-level checks.
+Daily operation should use the relevant stage entrypoint under `apps/`.
+`tools/` contains reusable one-off utilities for calibration, capture,
+debugging, and low-level checks.

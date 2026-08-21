@@ -20,7 +20,7 @@ grasp_points:
 two_hand_holding:
   left_hand_q: [0.2, 0.9, 0.35, 0.45, 0.56, 0.65]
   right_hand_q: [0.2, 0.9, 0.35, 0.45, 0.56, 0.65]
-  lift_m: 0.15
+  lift_m: 0.30
   pullback_m: -0.20
   lift_duration_sec: 5.0
   pullback_duration_sec: 8.0
@@ -41,7 +41,7 @@ default_place_point:
     - data/runtime/transport_box_lift_10cm_latest.json
 
 navigation:
-  start_goal: transport_start_area   # placeholder, not measured yet
+  start_goal: transport_start_area
   end_goal: transport_place_area
 
 motion:

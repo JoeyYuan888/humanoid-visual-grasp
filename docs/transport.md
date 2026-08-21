@@ -83,7 +83,7 @@ body_offset    = -0.17 m   # BASE x 负方向，往身体 17cm；相比上一版
 side_z_offset  = 0.38 m    # 当前夹紧点上移 38cm；相比上一版下调 2cm
 motion_duration = 5.0 s
 side_motion_duration = 10.0 s   # 预抓取到两侧靠近点降速 50%
-carry_lift = 0.15 m             # 夹紧/手指补夹后抬高 15cm
+carry_lift = 0.30 m             # 夹紧/手指补夹后抬高 30cm
 carry_waist_joints = [-0.3, 0.3, 0.0, 0.0]  # 回收后设置 3-6 四个身体关节
 carry_pullback = -0.20 m        # 抬高后 BASE x 负方向回收 20cm
 ```
@@ -131,12 +131,13 @@ python apps/transport/run_transport_place_return.py \
 当前搬运姿态
 -> transport_place_dual 实际放置点
 -> 双手复位/松开
--> transport_box_side_approach_latest 外扩退开点
+-> 双手水平外扩 10cm，先离开箱子侧壁
+-> 双手上抬 12cm，避开箱子/桌面
 -> transport_pregrasp_dual 中间点
 -> transport_home_dual home 点
 ```
 
-不要把 `transport_place_dual.json` 再当外扩点使用；外扩退开点仍然使用 `data/runtime/transport_box_side_approach_latest.json`。
+不要把 `transport_place_dual.json` 再当外扩点使用；`data/runtime/transport_box_side_approach_latest.json` 是搬运抓取阶段的外扩点，放置 return 默认不再经过它，避免松手后往低处运动撞桌面。只有调试需要时才加 `--use-outside-retreat`。
 
 当前箱子搬运手型：
 
@@ -145,7 +146,7 @@ left_hand_q  = [0.2, 0.9, 0.35, 0.45, 0.56, 0.65]
 right_hand_q = [0.2, 0.9, 0.35, 0.45, 0.56, 0.65]
 ```
 
-当前 `run_transport_flow.py` 默认已自动执行手指补夹、抬高 15cm、往身体回收 20cm、调整腰部搬运姿态。调试时可用 `--skip-hand-adjust`、`--skip-carry-lift`、`--skip-carry-pullback` 单独跳过。
+当前 `run_transport_flow.py` 默认已自动执行手指补夹、抬高 30cm、往身体回收 20cm、调整腰部搬运姿态。调试时可用 `--skip-hand-adjust`、`--skip-carry-lift`、`--skip-carry-pullback` 单独跳过。
 
 默认放置步骤位置：
 
@@ -161,8 +162,12 @@ place_area / shelf_place_area 是塑料袋放置阶段的地图点。
 transport_place_area 是箱子搬运阶段的默认放置地图点。
 
 搬运导航点：
-start_goal = transport_start_area     # 占位，尚未测量，不可直接运行
-end_goal   = transport_place_area     # 已测量，当前默认终点
+start_goal = transport_start_area     # 已测量，当前默认搬运起点
+end_goal   = transport_place_area     # 已测量，当前默认搬运终点
+
+transport_start_area:
+position = [-7.380269721533427, 0.19799060974311278, 0.011689840544793372]
+orientation = [0.007614974318803528, 0.005543900034384535, 0.9942451605977168, -0.10671381338211451]
 
 相关文件：
 configs/navigation.yaml
@@ -731,7 +736,7 @@ python apps/transport/run_dual_pose_path.py \
 
 ```text
 1. 当前左右手型已写入 transport flow 自动执行。
-2. 抬高 15cm、往身体方向回收 20cm、腰部姿态调整已写入 transport flow，后续继续优化搬运直腰姿态。
+2. 抬高 30cm、往身体方向回收 20cm、腰部姿态调整已写入 transport flow，后续继续优化搬运直腰姿态。
 3. 记录稳定 carry pose。
 4. 后续再接导航阶段。
 ```

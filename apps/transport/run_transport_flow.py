@@ -457,7 +457,7 @@ def main() -> None:
     )
     parser.add_argument("--execute-delay", type=float, default=2.0)
     parser.add_argument("--max-motion", type=float, default=2.0)
-    parser.add_argument("--carry-lift", type=float, default=0.15, help="Lift height after clamp/hand adjust, in BASE z meters.")
+    parser.add_argument("--carry-lift", type=float, default=0.30, help="Lift height after clamp/hand adjust, in BASE z meters.")
     parser.add_argument(
         "--carry-pullback",
         type=float,

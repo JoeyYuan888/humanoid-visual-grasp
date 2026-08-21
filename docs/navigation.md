@@ -17,6 +17,14 @@ python apps/navigation/run_navigation_flow.py \
   --goal demo_start
 ```
 
+在本机 `detect` conda 环境里通常没有 ROS1 `actionlib`，脚本会自动切到 rosbridge：
+
+```bash
+python apps/navigation/run_navigation_flow.py \
+  --goal transport_place_area \
+  --ws-url ws://192.168.20.102:9091
+```
+
 直接传 waypoint：
 
 ```bash

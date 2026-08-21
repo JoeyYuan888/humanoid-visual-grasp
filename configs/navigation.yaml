@@ -34,9 +34,9 @@ goals:
     z: 0.0
     yaw_deg: 0.0
 
-  # Box transport start point. Placeholder until measured on robot map.
+  # Box transport start point.
   transport_start_area:
-    measured: false
+    waypoint: [-7.380269721533427, 0.19799060974311278, 0.011689840544793372, 0.007614974318803528, 0.005543900034384535, 0.9942451605977168, -0.10671381338211451]
 
   # Plastic-bag placement navigation point near shelf/place workstation.
   place_area:
