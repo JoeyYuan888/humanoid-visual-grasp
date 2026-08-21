@@ -158,6 +158,11 @@ def main() -> None:
     parser.add_argument("--type", default="quintic", choices=["quintic", "cubic"])
     parser.add_argument("--use-joints", action="store_true", help="Use saved mpc_state from target files.")
     parser.add_argument(
+        "--points-service",
+        default=POINTS_SERVICE,
+        help="Service used when --use-joints is not set. Default: /wa/points_seq_tracking.",
+    )
+    parser.add_argument(
         "--hold-right-current",
         action="store_true",
         help="Keep current right TCP pose and right-arm joints while applying left/body joints from targets.",
@@ -223,7 +228,7 @@ def main() -> None:
             service_name = POINTS_WITH_JOINTS_SERVICE
             request = _build_request_with_joints(left_poses, right_poses, states, args.duration, args.type)
         else:
-            service_name = POINTS_SERVICE
+            service_name = args.points_service
             request = _build_request(left_poses, right_poses, args.duration, args.type)
 
         print(f"[动作] 准备发送 MPC 轨迹 service={service_name}")

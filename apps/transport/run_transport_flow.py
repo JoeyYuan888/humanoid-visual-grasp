@@ -32,17 +32,23 @@ DEFAULT_PREGRASP = os.path.join(PROJECT_ROOT, "data", "poses", "transport", "tra
 DEFAULT_SIDE_APPROACH = os.path.join(PROJECT_ROOT, "data", "runtime", "transport_box_side_approach_latest.json")
 DEFAULT_CLAMP_TARGET = os.path.join(PROJECT_ROOT, "data", "runtime", "transport_box_clamp_latest.json")
 MPC_MODE_SERVICE = "/wa/wa_hardware_interface/mpc_mode_setting"
-PRESSURE_TOPIC_TYPE = "hand/PressureSensor"
-LEFT_PRESSURE_TOPIC = "/zj_humanoid/hand/finger_pressures/left"
-RIGHT_PRESSURE_TOPIC = "/zj_humanoid/hand/finger_pressures/right"
+ADMITTANCE_MODE_SERVICE = "/wa/admittance_mode_setting"
+ADMITTANCE_POINTS_SERVICE = "/wa/points_seq_tracking_with_admittance"
+HAND_SERVICE_TYPE = "hand_controller/JointSwitch"
+LEFT_HAND_SERVICE = "/zj_humanoid/hand/joint_switch/left"
+RIGHT_HAND_SERVICE = "/zj_humanoid/hand/joint_switch/right"
+DEFAULT_LEFT_HAND_Q = [0.2, 0.9, 0.35, 0.45, 0.56, 0.65]
+DEFAULT_RIGHT_HAND_Q = [0.2, 0.9, 0.35, 0.45, 0.56, 0.65]
 KEY_LINE_PATTERNS = (
     "[✓]",
     "[✗]",
     "[!]",
     "[动作]",
     "[mpc_mode=",
+    "[admittance=",
     "[neck]",
     "[MPC] response:",
+    "[hand-",
     "left :",
     "right:",
     "height fallback:",
@@ -156,68 +162,6 @@ StepAction = list[str] | Callable[[], None]
 Step = tuple[str, StepAction, bool]
 
 
-def _pressure_stats(pressure: list[float] | None) -> tuple[float, float, float]:
-    if not pressure:
-        return 0.0, 0.0, 0.0
-    positive = [max(0.0, float(value)) for value in pressure]
-    absolute = [abs(float(value)) for value in pressure]
-    return max(absolute) if absolute else 0.0, max(positive) if positive else 0.0, sum(positive)
-
-
-class DualPressureClient:
-    def __init__(self, ws_url: str):
-        self.ws_url = ws_url
-        self.client = None
-        self.topics = []
-        self.latest = {"left": None, "right": None}
-        self.latest_stamp = {"left": 0.0, "right": 0.0}
-        self.lock = threading.Lock()
-
-    def connect(self) -> None:
-        self.client = _connect(self.ws_url)
-        self.topics = [
-            roslibpy.Topic(self.client, LEFT_PRESSURE_TOPIC, PRESSURE_TOPIC_TYPE),
-            roslibpy.Topic(self.client, RIGHT_PRESSURE_TOPIC, PRESSURE_TOPIC_TYPE),
-        ]
-        self.topics[0].subscribe(lambda msg: self._callback("left", msg))
-        self.topics[1].subscribe(lambda msg: self._callback("right", msg))
-        print("    [动作] 已订阅左右手指尖压力", flush=True)
-
-    def _callback(self, side: str, message: dict) -> None:
-        pressure = message.get("pressure")
-        if pressure is None:
-            return
-        with self.lock:
-            self.latest[side] = [float(value) for value in pressure]
-            self.latest_stamp[side] = time.time()
-
-    def read(self, timeout: float) -> dict[str, list[float] | None]:
-        start = time.time()
-        while time.time() - start < timeout:
-            with self.lock:
-                if self.latest["left"] is not None and self.latest["right"] is not None:
-                    return {
-                        "left": list(self.latest["left"]),
-                        "right": list(self.latest["right"]),
-                    }
-            time.sleep(0.05)
-        with self.lock:
-            return {
-                "left": list(self.latest["left"]) if self.latest["left"] is not None else None,
-                "right": list(self.latest["right"]) if self.latest["right"] is not None else None,
-            }
-
-    def close(self) -> None:
-        for topic in self.topics:
-            try:
-                topic.unsubscribe()
-            except Exception:
-                pass
-        _safe_close(self.client)
-        self.client = None
-        self.topics = []
-
-
 def _parse_ws_url(ws_url: str) -> tuple[str, int]:
     stripped = ws_url.replace("ws://", "").replace("wss://", "")
     host, port = stripped.split(":")
@@ -275,6 +219,61 @@ def _set_mpc_mode_true(ws_url: str) -> None:
     finally:
         _safe_close(client)
     print("    [动作] 设置 MPC running mode 完成", flush=True)
+
+
+def _set_admittance_mode(ws_url: str, enable: bool) -> None:
+    print(f"    [动作] 设置导纳模式 {'ON' if enable else 'OFF'} 开始", flush=True)
+    client = _connect(ws_url)
+    try:
+        srv_type = _service_type(client, ADMITTANCE_MODE_SERVICE)
+        if not srv_type:
+            raise RuntimeError(f"找不到导纳 mode 服务: {ADMITTANCE_MODE_SERVICE}")
+        response = _call(client, ADMITTANCE_MODE_SERVICE, srv_type, {"data": bool(enable)})
+        print(f"    [admittance={enable}] {response}", flush=True)
+        if response and response.get("success") is False:
+            raise RuntimeError(f"导纳 mode 设置失败: {response}")
+    finally:
+        _safe_close(client)
+    print(f"    [动作] 设置导纳模式 {'ON' if enable else 'OFF'} 完成", flush=True)
+
+
+def _parse_q(value: str) -> list[float]:
+    stripped = value.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        stripped = stripped[1:-1]
+    q = [float(item.strip()) for item in stripped.split(",") if item.strip()]
+    if len(q) != 6:
+        raise ValueError(f"hand q 需要 6 个值，收到 {len(q)}: {value}")
+    return q
+
+
+def _format_q(q: list[float]) -> str:
+    return "[" + ", ".join(f"{value:.3f}" for value in q) + "]"
+
+
+def _call_hand(ws_url: str, service_name: str, label: str, q: list[float]) -> None:
+    print(f"    [动作] {label} 手指补夹开始 q={_format_q(q)}", flush=True)
+    client = _connect(ws_url)
+    try:
+        srv_type = _service_type(client, service_name) or HAND_SERVICE_TYPE
+        response = _call(client, service_name, srv_type, {"q": [float(value) for value in q]})
+        if response and response.get("success") is False:
+            raise RuntimeError(f"{label} hand joint_switch failed: {response}")
+        print(f"    [hand-{label}] success", flush=True)
+    finally:
+        _safe_close(client)
+    print(f"    [动作] {label} 手指补夹完成", flush=True)
+
+
+def _adjust_hands(args, execute: bool) -> None:
+    left_q = _parse_q(args.left_hand_q)
+    right_q = _parse_q(args.right_hand_q)
+    if not execute:
+        print(f"    [DRY RUN] left hand q={_format_q(left_q)}", flush=True)
+        print(f"    [DRY RUN] right hand q={_format_q(right_q)}", flush=True)
+        return
+    _call_hand(args.ws_url, LEFT_HAND_SERVICE, "left", left_q)
+    _call_hand(args.ws_url, RIGHT_HAND_SERVICE, "right", right_q)
 
 
 def _run_child_stream(cmd: list[str]) -> tuple[int, str]:
@@ -345,50 +344,22 @@ def _clamp_offsets(outside_offset: float, clamp_offset: float, step: float, expl
         outside = abs(float(outside_offset))
         return [offset for offset in offsets if offset < outside + 1e-9]
 
-    outside = abs(float(outside_offset))
-    clamp = abs(float(clamp_offset))
-    step = abs(float(step))
-    if step <= 0:
-        raise ValueError("--clamp-step must be > 0")
-    if outside <= clamp:
-        return [clamp]
-    offsets = []
-    current = outside
-    while current - step > clamp:
-        current -= step
-        offsets.append(round(current, 4))
-    offsets.append(round(clamp, 4))
-    return offsets
-
-
-def _pressure_reached(
-    pressure_client: DualPressureClient,
-    left_threshold: float,
-    right_threshold: float,
-    timeout: float,
-) -> bool:
-    pressures = pressure_client.read(timeout=timeout)
-    left_abs, left_pos, left_sum = _pressure_stats(pressures.get("left"))
-    right_abs, right_pos, right_sum = _pressure_stats(pressures.get("right"))
-    print(
-        f"    [pressure] left abs={left_abs:.3f} pos={left_pos:.3f} sum_pos={left_sum:.3f}; "
-        f"right abs={right_abs:.3f} pos={right_pos:.3f} sum_pos={right_sum:.3f}",
-        flush=True,
-    )
-    return left_abs >= left_threshold and right_abs >= right_threshold
+    return [round(abs(float(clamp_offset)), 4)]
 
 
 def _run_clamp_sequence(args, side_motion_duration: float, execute: bool) -> None:
     offsets = _clamp_offsets(args.outside_offset, args.clamp_offset, args.clamp_step, args.clamp_offsets)
-    print(f"    [动作] 分段夹紧 offset 序列: {', '.join(f'{value:.3f}' for value in offsets)}", flush=True)
+    print(f"    [动作] 导纳夹紧 offset: {', '.join(f'{value:.3f}' for value in offsets)}", flush=True)
+    print(f"    [动作] 夹紧控制模式: {args.clamp_control}", flush=True)
     if not execute:
         return
 
-    pressure_client = None
-    if not args.disable_clamp_pressure:
-        pressure_client = DualPressureClient(args.ws_url)
-        pressure_client.connect()
+    admittance_enabled = False
     try:
+        if args.clamp_control == "admittance":
+            _set_mpc_mode_true(args.ws_url)
+            _set_admittance_mode(args.ws_url, True)
+            admittance_enabled = True
         for offset in offsets:
             _write_side_approach_target(
                 args.base_target_output,
@@ -413,8 +384,10 @@ def _run_clamp_sequence(args, side_motion_duration: float, execute: bool) -> Non
                 f"{args.clamp_step_duration:.3f}",
                 "--execute-delay",
                 f"{args.clamp_execute_delay:.3f}",
-                "--execute",
             ]
+            if args.clamp_control == "admittance":
+                cmd.extend(["--points-service", ADMITTANCE_POINTS_SERVICE])
+            cmd.append("--execute")
             print(f"    [动作] 夹紧到 outside_offset={offset:.3f}m 开始", flush=True)
             returncode, output = _run_child_stream(cmd)
             if returncode != 0:
@@ -423,22 +396,15 @@ def _run_clamp_sequence(args, side_motion_duration: float, execute: bool) -> Non
                     print("[子进程输出尾部]", flush=True)
                     print("\n".join(tail), flush=True)
                 raise subprocess.CalledProcessError(returncode, cmd, output=output)
-            time.sleep(max(0.0, args.clamp_step_duration + args.clamp_pressure_settle_sec))
-            if pressure_client is not None and _pressure_reached(
-                pressure_client,
-                args.clamp_left_pressure_threshold,
-                args.clamp_right_pressure_threshold,
-                args.clamp_pressure_timeout,
-            ):
-                print(f"    [✓] 压力达标，停止继续收紧 offset={offset:.3f}m", flush=True)
-                return
-            print(f"    [动作] offset={offset:.3f}m 压力未达标，继续收紧", flush=True)
-        print("    [!] 已到最终夹紧 offset，压力仍未达到阈值", flush=True)
+            time.sleep(max(0.0, args.clamp_step_duration))
+            print(f"    [动作] offset={offset:.3f}m 导纳夹紧完成", flush=True)
+        print("    [✓] 导纳夹紧完成", flush=True)
     finally:
-        if pressure_client is not None:
-            pressure_client.close()
-
-
+        if admittance_enabled:
+            try:
+                _set_admittance_mode(args.ws_url, False)
+            except Exception as exc:
+                print(f"    [!] 关闭导纳失败，请人工确认: {exc}", flush=True)
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Transport approach flow: low-head box detection -> pregrasp -> box side approach.",
@@ -462,11 +428,26 @@ def main() -> None:
     parser.add_argument("--skip-motion", action="store_true", help="Skip all arm motion after detection/lock.")
     parser.add_argument("--skip-side-approach", action="store_true", help="Stop after transport_pregrasp_dual.")
     parser.add_argument("--skip-clamp", action="store_true", help="Stop after the outer side approach point.")
+    parser.add_argument("--skip-carry-lift", action="store_true", help="Skip lifting the clamped box after hand adjustment.")
+    parser.add_argument("--skip-carry-pullback", action="store_true", help="Skip pulling the lifted box toward body.")
+    parser.add_argument("--skip-carry-second-lift", action="store_true", help="Skip second lift after pullback.")
+    parser.add_argument("--skip-carry-waist", action="store_true", help="Skip waist/body joint adjustment after pullback.")
+    parser.add_argument(
+        "--clamp-only",
+        action="store_true",
+        help="Only run the clamp sequence from the current robot pose. Reuses latest BASE target.",
+    )
     parser.add_argument("--skip-neck-down", action="store_true")
     parser.add_argument("--skip-neck-home", action="store_true")
+    parser.add_argument(
+        "--no-neck-verify",
+        action="store_true",
+        help="Do not abort detection when neck joint feedback does not match the commanded angle.",
+    )
     parser.add_argument("--neck-down-y", type=float, default=0.35)
     parser.add_argument("--neck-time", type=float, default=4.0)
     parser.add_argument("--tf-seconds", type=float, default=2.0)
+    parser.add_argument("--grasp-average-frames", type=int, default=5, help="Average latest N valid FoundationPose grasp frames.")
     parser.add_argument("--motion-duration", type=float, default=5.0)
     parser.add_argument(
         "--side-motion-duration",
@@ -476,32 +457,63 @@ def main() -> None:
     )
     parser.add_argument("--execute-delay", type=float, default=2.0)
     parser.add_argument("--max-motion", type=float, default=2.0)
+    parser.add_argument("--carry-lift", type=float, default=0.15, help="Lift height after clamp/hand adjust, in BASE z meters.")
+    parser.add_argument(
+        "--carry-pullback",
+        type=float,
+        default=-0.20,
+        help="Pullback after lift, in BASE x meters. Negative moves toward robot body.",
+    )
+    parser.add_argument("--carry-lift-duration", type=float, default=5.0)
+    parser.add_argument("--carry-pullback-duration", type=float, default=8.0)
+    parser.add_argument("--carry-second-lift", type=float, default=0.0, help="Optional second lift after pullback, in BASE z meters.")
+    parser.add_argument("--carry-second-lift-duration", type=float, default=5.0)
+    parser.add_argument(
+        "--carry-waist-joints",
+        default="3=-0.3,4=0.3,5=0.0,6=0.0",
+        help="WA2 body joint targets after pullback.",
+    )
+    parser.add_argument("--carry-waist-duration", type=float, default=8.0)
+    parser.add_argument("--carry-waist-weight", type=float, default=1.0)
+    parser.add_argument("--carry-waist-max-delta", type=float, default=0.60)
     parser.add_argument(
         "--body-offset",
         type=float,
-        default=-0.25,
+        default=-0.17,
         help="X offset for side approach in BASE frame. Negative moves toward robot body.",
     )
     parser.add_argument("--outside-offset", type=float, default=0.10, help="Outer wait offset in meters.")
-    parser.add_argument("--clamp-offset", type=float, default=0.02, help="Final clamp offset in meters.")
-    parser.add_argument("--clamp-step", type=float, default=0.02, help="Clamp inward step in meters when --clamp-offsets is empty.")
+    parser.add_argument("--clamp-offset", type=float, default=0.03, help="Final clamp offset in meters.")
+    parser.add_argument("--clamp-step", type=float, default=0.02, help="Deprecated. Kept for CLI compatibility; default clamp is single-step.")
     parser.add_argument(
         "--clamp-offsets",
-        default="0.08,0.04,0.03,0.02",
-        help="Comma separated clamp offset sequence. Default: 8cm -> 4cm -> 3cm -> 2cm.",
+        default="",
+        help="Optional comma separated debug clamp offset sequence. Default is single-step to --clamp-offset.",
     )
     parser.add_argument("--clamp-step-duration", type=float, default=3.0, help="MPC duration for each clamp step.")
     parser.add_argument("--clamp-execute-delay", type=float, default=0.0, help="Execute delay for each clamp step.")
-    parser.add_argument("--disable-clamp-pressure", action="store_true")
-    parser.add_argument("--clamp-left-pressure-threshold", type=float, default=0.15)
-    parser.add_argument("--clamp-right-pressure-threshold", type=float, default=0.15)
-    parser.add_argument("--clamp-pressure-timeout", type=float, default=1.0)
-    parser.add_argument("--clamp-pressure-settle-sec", type=float, default=0.2)
+    parser.add_argument(
+        "--clamp-control",
+        choices=["admittance", "points"],
+        default="admittance",
+        help="Clamp control mode. admittance uses /wa/points_seq_tracking_with_admittance; points uses normal /wa/points_seq_tracking.",
+    )
+    parser.add_argument("--skip-hand-adjust", action="store_true", help="Skip two-hand finger posture adjustment after clamp.")
+    parser.add_argument(
+        "--left-hand-q",
+        default=",".join(str(value) for value in DEFAULT_LEFT_HAND_Q),
+        help="Left hand q after box clamp.",
+    )
+    parser.add_argument(
+        "--right-hand-q",
+        default=",".join(str(value) for value in DEFAULT_RIGHT_HAND_Q),
+        help="Right hand q after box clamp.",
+    )
     parser.add_argument(
         "--side-z-offset",
         type=float,
-        default=0.05,
-        help="Additional Z offset for side approach after lowering 0.30m from plastic-bag TCP z offset.",
+        default=0.38,
+        help="Additional Z offset for side approach in BASE frame.",
     )
     parser.add_argument("--execute", action="store_true", help="Actually execute arm motions.")
     args = parser.parse_args()
@@ -515,6 +527,7 @@ def main() -> None:
     print(f"  WebSocket: {args.ws_url}")
     print(f"  Box camera temp: {args.target_output}")
     print(f"  Box BASE target output: {_rel(args.base_target_output)}")
+    print(f"  Grasp average frames: {args.grasp_average_frames}")
     print(f"  Pregrasp: {_rel(args.pregrasp_file)}")
     print(f"  Side approach: {_rel(args.side_approach_output)}")
     print(f"  Clamp target: {_rel(args.clamp_output)}")
@@ -523,17 +536,32 @@ def main() -> None:
     print(f"  Clamp offset: {args.clamp_offset:.3f} m")
     print(f"  Clamp step: {args.clamp_step:.3f} m")
     print(f"  Clamp offsets: {args.clamp_offsets}")
-    print(
-        f"  Clamp pressure threshold: "
-        f"L={args.clamp_left_pressure_threshold:.3f}, R={args.clamp_right_pressure_threshold:.3f}"
-    )
+    print(f"  Clamp control: {args.clamp_control}")
+    print(f"  Hand adjust: {not args.skip_hand_adjust}")
+    if not args.skip_hand_adjust:
+        print(f"    left q:  {_format_q(_parse_q(args.left_hand_q))}")
+        print(f"    right q: {_format_q(_parse_q(args.right_hand_q))}")
+    print(f"  Carry lift: {0.0 if args.skip_carry_lift else args.carry_lift:.3f} m")
+    print(f"  Carry pullback: {0.0 if args.skip_carry_pullback else args.carry_pullback:.3f} m")
+    print(f"  Carry second lift: {0.0 if args.skip_carry_second_lift else args.carry_second_lift:.3f} m")
+    print(f"  Carry waist: {'skip' if args.skip_carry_waist else args.carry_waist_joints}")
     print(f"  Side z offset: {args.side_z_offset:.3f} m")
     print(f"  Motion duration: pregrasp={args.motion_duration:.1f}s side={side_motion_duration:.1f}s")
     print(f"  Execute motion: {args.execute}")
     print("=" * 70)
 
     steps: list[Step] = []
-    if not args.skip_detect:
+    if args.clamp_only:
+        steps.append(
+            (
+                "仅执行导纳夹紧",
+                lambda: _run_clamp_sequence(args, side_motion_duration, args.execute),
+                False,
+            )
+        )
+        if not args.skip_hand_adjust:
+            steps.append(("双手手指补夹", lambda: _adjust_hands(args, args.execute), False))
+    elif not args.skip_detect:
         if args.backend == "foundationpose":
             detect_cmd = [
                 PYTHON,
@@ -546,6 +574,12 @@ def main() -> None:
                 f"{args.neck_time:.3f}",
                 "--output",
                 args.target_output,
+                "--base-output",
+                args.base_target_output,
+                "--tf-seconds",
+                f"{args.tf_seconds:.3f}",
+                "--grasp-average-frames",
+                str(args.grasp_average_frames),
             ]
         else:
             detect_cmd = [
@@ -572,9 +606,11 @@ def main() -> None:
             detect_cmd.append("--skip-neck-down")
         if args.skip_neck_home:
             detect_cmd.append("--skip-neck-home")
+        if args.no_neck_verify:
+            detect_cmd.append("--no-neck-verify")
         steps.append(("低头、识别盒子抓取点、保存结果、抬头", detect_cmd, False))
 
-    if not args.skip_lock_base:
+    if not args.clamp_only and not args.skip_lock_base and not (args.backend == "foundationpose" and not args.skip_detect):
         lock_cmd = [
             PYTHON,
             "apps/transport/lock_box_grasp_target.py",
@@ -589,7 +625,7 @@ def main() -> None:
         ]
         steps.append(("相机系左右抓取点 -> BASE 锁存", lock_cmd, False))
 
-    if not args.skip_motion:
+    if not args.clamp_only and not args.skip_motion:
         motion_cmd = [
             PYTHON,
             "apps/transport/run_dual_pose_path.py",
@@ -646,11 +682,111 @@ def main() -> None:
             if not args.skip_clamp:
                 steps.append(
                     (
-                        "分段夹紧并检测左右手压力",
+                        "导纳夹紧",
                         lambda: _run_clamp_sequence(args, side_motion_duration, args.execute),
                         False,
                     )
                 )
+                if not args.skip_hand_adjust:
+                    steps.append(("双手手指补夹", lambda: _adjust_hands(args, args.execute), False))
+                if not args.skip_carry_lift:
+                    lift_cmd = [
+                        PYTHON,
+                        "apps/transport/run_dual_relative_move_with_current_joints.py",
+                        "--ws-url",
+                        args.ws_url,
+                        "--dx",
+                        "0.0",
+                        "--dy",
+                        "0.0",
+                        "--dz",
+                        f"{args.carry_lift:.3f}",
+                        "--duration",
+                        f"{args.carry_lift_duration:.3f}",
+                        "--max-motion",
+                        f"{max(args.max_motion, abs(args.carry_lift) + 0.05):.3f}",
+                        "--execute-delay",
+                        f"{args.execute_delay:.3f}",
+                    ]
+                    if args.execute:
+                        lift_cmd.append("--execute")
+                    steps.append(("夹紧后抬高箱子", lift_cmd, True))
+                if not args.skip_carry_pullback:
+                    pullback_cmd = [
+                        PYTHON,
+                        "apps/transport/run_dual_relative_move_with_current_joints.py",
+                        "--ws-url",
+                        args.ws_url,
+                        "--dx",
+                        f"{args.carry_pullback:.3f}",
+                        "--dy",
+                        "0.0",
+                        "--dz",
+                        "0.0",
+                        "--duration",
+                        f"{args.carry_pullback_duration:.3f}",
+                        "--max-motion",
+                        f"{max(args.max_motion, abs(args.carry_pullback) + 0.05):.3f}",
+                        "--execute-delay",
+                        f"{args.execute_delay:.3f}",
+                    ]
+                    if not args.skip_carry_waist:
+                        pullback_cmd.extend(
+                            [
+                                "--body-joint-values",
+                                args.carry_waist_joints,
+                                "--weight",
+                                f"{args.carry_waist_weight:.3f}",
+                            ]
+                        )
+                    if args.execute:
+                        pullback_cmd.append("--execute")
+                    step_name = "抬高后往身体回收箱子"
+                    if not args.skip_carry_waist:
+                        step_name += "，同时约束腰部搬运姿态"
+                    steps.append((step_name, pullback_cmd, True))
+                if not args.skip_carry_second_lift and abs(args.carry_second_lift) > 1e-9:
+                    second_lift_cmd = [
+                        PYTHON,
+                        "apps/transport/run_dual_relative_move_with_current_joints.py",
+                        "--ws-url",
+                        args.ws_url,
+                        "--dx",
+                        "0.0",
+                        "--dy",
+                        "0.0",
+                        "--dz",
+                        f"{args.carry_second_lift:.3f}",
+                        "--duration",
+                        f"{args.carry_second_lift_duration:.3f}",
+                        "--max-motion",
+                        f"{max(args.max_motion, abs(args.carry_second_lift) + 0.05):.3f}",
+                        "--execute-delay",
+                        f"{args.execute_delay:.3f}",
+                    ]
+                    if args.execute:
+                        second_lift_cmd.append("--execute")
+                    steps.append(("回收后再次抬高箱子", second_lift_cmd, True))
+                if args.skip_carry_pullback and not args.skip_carry_waist:
+                    waist_cmd = [
+                        PYTHON,
+                        "apps/transport/run_body_joint_tune.py",
+                        "--ws-url",
+                        args.ws_url,
+                        "--joint-values",
+                        args.carry_waist_joints,
+                        "--duration",
+                        f"{args.carry_waist_duration:.3f}",
+                        "--weight",
+                        f"{args.carry_waist_weight:.3f}",
+                        "--max-delta",
+                        f"{args.carry_waist_max_delta:.3f}",
+                        "--execute-delay",
+                        f"{args.execute_delay:.3f}",
+                    ]
+                    if args.execute:
+                        waist_cmd.append("--execute")
+                    steps.append(("回收后调整腰部搬运姿态", waist_cmd, True))
 
     if not steps:
         print("[!] 没有需要执行的步骤")

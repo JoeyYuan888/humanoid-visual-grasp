@@ -1,180 +1,52 @@
-# 视觉抓取完整技术文档
+# Grasp Stage
 
-本文档面向第一次接手本项目的同事，目标是从零开始完成：
+本文档只描述“塑料袋抓取”本身，不描述抓后 OCR/QR、导航、货架放置、箱子拉出/推回。
 
-```text
-识别塑料袋 -> MPC 抓取 -> 举到头部相机前扫二维码 -> 放回原抓取位置 -> 回收复位
-```
-
-本文档只描述当前已经跑通的 MPC 技术路线。课程手册、部署教程和厂商接口文档保留为背景资料，不作为日常操作入口。旧过程记录已经删除，关键结论已整合到本文档。
-
-## 1. 当前结论
-
-当前完整闭环已经跑通：
+当前抓取阶段边界：
 
 ```text
-1. MPC neck 低头。
-2. 头部 RealSense 识别塑料袋并锁存 BASE 坐标。
-3. MPC neck 抬头。
-4. 右手打开。
-5. 右臂从 via0/home 起步，发送 via1 -> via2 -> via3。
-6. via3 -> 视觉抓取点。
-7. 右手闭合抓取。
-8. 抓取点 -> QR 展示点。
-9. 头部相机整帧二维码扫描。
-10. QR 展示点 -> via3。
-11. via3 -> 视觉放置点上方。
-12. 右手打开放置。
-13. via3 -> via2 -> via1 -> via0 回收。
+input : 机器人在抓取起始姿态，桌面/地面上有塑料袋，头部相机可见目标
+logic : 低头锁存目标 -> MPC 安全路径 -> 右手到抓取点 -> 手掌闭合 -> 压力确认
+output: 右手抓住塑料袋，机器人停在抓取点或交给后续抓后识别流程
 ```
 
-已成功识别过的二维码：
+抓取之后的内容分别看：
 
 ```text
-KF2492858782
+docs/post_grasp_identification.md   抓后 OCR/QR 识别
+docs/place.md                       货架放置
+docs/flowchart.md                   总流程图
+docs/troubleshooting.md             故障处理
 ```
 
-扫码结果文件：
+## 固定入口
 
-```text
-data/runtime/post_grasp_qr_latest.json
-```
-
-## 2. 项目目录
-
-日常需要关注：
-
-```text
-apps/grasp/                         当前日常运行入口
-apps/navigation/                    后续导航阶段预留目录
-apps/place/                         后续独立放置阶段预留目录
-robot_grasp/                        视觉、深度、手掌、日志核心模块
-tools/                              调试、标定、采集、维护工具
-tools/debug/                        接口、性能、旧 dry-run 等调试脚本
-configs/                            后续配置分层预留目录
-data/runtime/                       latest lock、OCR/QR 结果、临时输出
-data/poses/                         via 点、QR 展示点、抓取 profile
-data/calibration/                   手眼矩阵
-data/samples/                       CSV 日志和离线样本
-models/                             塑料袋 YOLO、OCR、QR 模型
-ros_pkgs/                           需要复制到机器人 catkin_ws 的 ROS 包
-requirements.txt                    Python 通用依赖
-requirements-torch-cu128.txt        RTX 50 系列当前验证过的 PyTorch CUDA 依赖
-```
-
-日常命令使用 `apps/grasp/`。`tools/` 只用于单项调试、标定、点位采集和底层检查。
-
-### 2.1 业务阶段边界
-
-项目最终应按四个业务阶段组织：
-
-```text
-grasp -> transport -> navigation -> place
-```
-
-当前已经跑通的是 `apps/grasp/`：
-
-```text
-低头锁存 -> via 安全路径 -> 抓取 -> OCR/QR 识别 -> 放回抓取点 -> 回收
-```
-
-后续搬运、导航、放置接入时：
-
-```text
-apps/transport/   负责盒子识别、双手抓取点、双臂夹持和搬运
-apps/navigation/  负责目的地选择、导航调用、到达判断
-apps/place/       负责到达后的独立放置点选择、放置、回收
-```
-
-不要把盒子搬运、导航和最终放置逻辑继续写进 `apps/grasp/full_grasp_flow_impl.py`。
-如果需要复用抓取阶段的 OCR/QR 结果，通过 `data/runtime/post_grasp_qr_latest.json` 或后续正式状态文件传递。
-
-当前文档入口：
-
-```text
-docs/overview.md                    文档索引
-docs/operations.md                  现场运行手册
-docs/grasp.md                       当前抓取阶段技术细节
-```
-
-保留参考资料：
-
-```text
-docs/reference/人形机器人二次开发接口讲解与实操课程手册.md
-docs/reference/视觉抓取部署教程-从感知到MPC运动.md
-docs/reference/视觉抓取部署教程-MPC路线.md
-docs/reference/WA型号-MPC使用接口文档-外部 副本.md
-docs/reference/handeye_alignment_plan.md
-```
-
-日常操作以本文档为准。
-
-旧过程记录已经清理；有效信息已归并到本文档的环境、参数、流程、故障排查和禁止事项章节。
-
-## 3. 运行环境
-
-电脑端使用 conda 环境：
+只执行抓取阶段，手掌闭合后停在抓取点：
 
 ```bash
-conda create -n detect python=3.10 -y
-conda activate detect
-conda install -n detect zbar -c conda-forge -y
+python apps/grasp/run_grasp_flow.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --return-mode none \
+  --max-z 1.70 \
+  --execute
 ```
 
-CUDA 是必需项。塑料袋识别默认拒绝 CPU fallback。
-
-检查 GPU：
+如果只想验证抓取锁存和抓取动作，不需要重新检测目标，可复用上一次锁存：
 
 ```bash
-nvidia-smi
-python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"
+python apps/grasp/run_grasp_flow.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --skip-lock \
+  --return-mode none \
+  --max-z 1.70 \
+  --execute
 ```
 
-期望：
+抓取后需要继续 OCR/QR 时，看 `docs/post_grasp_identification.md`；需要货架放置时，看 `docs/place.md`。
 
-```text
-torch.cuda.is_available() == True
-```
+## 机器人端准备
 
-先安装匹配本机 GPU 的 CUDA 版 PyTorch。
-
-RTX 50 系列/RTX 5060 使用：
-
-```bash
-pip install -r requirements-torch-cu128.txt
-```
-
-其他显卡不要照抄 cu128 文件，应按本机 GPU/驱动选择匹配的 CUDA 版 PyTorch。
-
-然后安装项目通用依赖：
-
-```bash
-pip install --no-deps -r requirements.txt
-```
-
-`requirements.txt` 是通用项目依赖，不绑定具体显卡。不要让依赖安装过程把
-`opencv-contrib-python` 替换掉，否则 ArUco/二维码相关工具可能异常。
-
-OCR 是可选功能。ONNX Runtime 不固定写入通用依赖，因为 GPU/CPU 版本和机器环境强相关。
-
-CPU 调试：
-
-```bash
-pip install onnxruntime
-```
-
-GPU OCR 需要确认本机 ONNX Runtime GPU 依赖完整后再启用：
-
-```bash
-pip install onnxruntime-gpu
-OCR_USE_CUDA=1 python tools/debug/debug_ocr_image.py <图片路径>
-```
-
-## 4. 机器人端 rosbridge
-
-当前使用自己的 huimin1.4 容器，不修改原厂 rosbridge。
-
-进入容器后启动：
+在 `huimin1.4` 容器内启动 rosbridge：
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -182,86 +54,65 @@ source /workspace/catkin_ws/mpc_ws/devel/setup.bash
 roslaunch rosbridge_server rosbridge_websocket.launch port:=9091
 ```
 
-电脑端 WebSocket：
+电脑端固定连接：
 
 ```text
 ws://192.168.20.102:9091
 ```
 
-机器人端确认服务类型：
-
-```bash
-rosservice call /rosapi/service_type "service: /wa/points_seq_tracking"
-rosservice call /rosapi/service_type "service: /wa/points_seq_tracking_with_joints"
-```
-
-如果出现 `Unable to load the manifest for package mpc_target`，说明 rosbridge 启动 shell 没有 source：
-
-```bash
-/workspace/catkin_ws/mpc_ws/devel/setup.bash
-```
-
-需要重启 rosbridge。
-
-## 5. MPC 控制边界
-
-当前项目只保留 MPC 主路线。SDK 路线文档和 SDK 专用脚本已经删除。
-
-原则：
-
-```text
-1. 手臂运动使用 MPC。
-2. 手掌 joint_switch 可以在 MPC mode 开启时直接调用。
-3. 头部使用 MPC neck_movej。
-4. 试教只用于记录 MPC via 点，不作为自动流程的一部分。
-```
-
-开启 MPC mode：
+确认 MPC running mode：
 
 ```bash
 rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: true"
 ```
 
-停止 tracking：
+## 运行环境
+
+电脑端使用 conda 环境：
 
 ```bash
-rosservice call /wa/tracking_stop "{}"
+conda activate detect
 ```
 
-关闭 MPC mode：
+抓取视觉默认使用 CUDA：
 
 ```bash
-rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: false"
+nvidia-smi
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"
 ```
 
-## 6. 当前关键参数
-
-### 6.1 Neck
-
-当前低头命令值：
+要求：
 
 ```text
-neck_joint: [0.0, 0.35]
+torch.cuda.is_available() == True
 ```
 
-命令：
+安装顺序：
 
 ```bash
-rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: true"
-rosservice call /wa/wa_hardware_interface/neck_movej "neck_joint: [0.0, 0.35]
-t: 4"
+pip install -r requirements-torch-cu128.txt
+pip install --no-deps -r requirements.txt
 ```
 
-抬头/复位：
+不要省略 `--no-deps`，避免依赖安装覆盖 CUDA 版 PyTorch 或把 `opencv-contrib-python` 换成普通 `opencv-python`。
 
-```bash
-rosservice call /wa/wa_hardware_interface/neck_movej "neck_joint: [0.0, 0.0]
-t: 4"
+## Head Neck
+
+抓取阶段低头角度：
+
+```text
+neck_joint = [0.0, 0.35]
 ```
 
-注意：`neck_movej` 命令值和 `/zj_humanoid/upperlimb/joint_states` 反馈值存在偏差。实测发 `0.39` 时反馈约 `0.435`，接近低头限位并容易校验失败。当前统一用 `0.35`。
+抬头：
 
-### 6.2 塑料袋识别
+```text
+neck_joint = [0.0, 0.0]
+```
+
+说明：实测 `0.39/0.40` 容易接近限位或造成抬头卡顿；当前抓取锁存统一使用 `0.35`。
+
+## Plastic Bag Detection
 
 模型：
 
@@ -269,7 +120,7 @@ t: 4"
 models/yolo/best.pt
 ```
 
-核心配置：
+核心参数：
 
 ```text
 YOLO_CONF = 0.25
@@ -279,54 +130,46 @@ REQUIRE_CUDA = True
 YOLO_HALF = True
 ```
 
-抓取点像素位置：
+抓取点像素：
 
 ```text
 bbox x = 0.50
 bbox y = 0.333
 ```
 
-含义：抓取点取 bbox 上方 2/3 区域的中点。
+含义：bbox 上方 2/3 区域的中点。
 
-深度 ROI：
-
-```text
-当前取完整 bbox
-```
-
-锁存阶段目标选择：
+锁存目标选择策略：
 
 ```text
-默认先做多帧连续性过滤，再选择 bbox 中心最靠近画面下半部中点的稳定目标。
+多帧连续性过滤 FP
+默认选择 bbox 中心最靠近画面下半部中点的稳定目标
 --min-lock-hits 3
 --lock-match-distance 0.12
 --lock-target-policy image_center
 ```
 
-白色塑料袋过曝时，可临时开启轻量高光抑制：
+白色塑料袋过曝时使用轻量高光抑制：
 
 ```bash
 --highlight-suppression mild
 ```
 
-说明：
+如果现场光照正常或漏检，回退：
 
-```text
-单独运行 apps/grasp/run_perception_lock.py 时默认值是 none，不改变原始检测输入。
-完整流程 `apps/grasp/run_grasp_flow.py` 已默认使用 mild。
-mild 只用于锁存阶段 YOLO 输入帧，轻微压暗高光并做低强度 CLAHE。
-如果检测效果变差，完整流程加 --highlight-suppression none 即可回退。
+```bash
+--highlight-suppression none
 ```
 
-### 6.3 手眼矩阵
+## CAM2HEAD
 
-当前默认：
+当前默认手眼矩阵：
 
 ```text
 data/calibration/cam2head_vendor_new_20260803.json
 ```
 
-对应矩阵：
+矩阵：
 
 ```text
 [[-0.02589883, -0.28658041,  0.95770607,  0.07804458],
@@ -335,79 +178,70 @@ data/calibration/cam2head_vendor_new_20260803.json
  [ 0.0,         0.0,         0.0,         1.0]]
 ```
 
-### 6.4 TCP 抓取 offset
+锁存输出：
 
-当前保留两套抓取 profile，位于 `data/`：
+```text
+data/runtime/mpc_locked_target_latest.json
+```
+
+## TCP Offset
+
+当前默认抓取 profile：
+
+```text
+data/poses/grasp_profile_tuned_with_orientation.json
+```
+
+固定参数：
+
+```text
+offset_x =  0.045
+offset_y = -0.095
+offset_z =  0.35
+grasp_height = 0.02
+orientation_file = data/poses/mpc_grasp_tuned_pose_right.json
+orientation_apply = prealign
+```
+
+目标计算：
+
+```text
+target_tcp.x = object_base.x + offset_x
+target_tcp.y = object_base.y + offset_y
+target_tcp.z = object_base.z + grasp_height + offset_z
+```
+
+当前最终 TCP 高度：
+
+```text
+target_tcp.z = object_base.z + 0.37
+```
+
+保留回退 profile：
 
 ```text
 data/poses/grasp_profile_legacy_no_orientation.json
-  offset_x = -0.04
-  offset_y = -0.10
-  offset_z =  0.35
-  orientation_file = null
-
-data/poses/grasp_profile_tuned_with_orientation.json
-  offset_x =  0.045
-  offset_y = -0.095
-  offset_z =  0.35
-  orientation_file = data/poses/mpc_grasp_tuned_pose_right.json
-  orientation_apply = prealign
 ```
 
-当前默认使用 `tuned_with_orientation`。目标计算：
-
-```text
-target_tcp.x = object_base.x + profile.offset.x
-target_tcp.y = object_base.y + profile.offset.y
-target_tcp.z = object_base.z + above_object_height + profile.offset.z
-```
-
-当前完整流程里：
-
-```text
-grasp_profile = tuned_with_orientation
-above_object_height = 0.02
-最终 TCP z = object_z + 0.36
-```
-
-如果需要回退到旧版无抓取姿态：
+只有明确要回退无姿态版本时使用：
 
 ```bash
-python apps/grasp/run_grasp_flow.py ... --grasp-profile legacy_no_orientation
+--grasp-profile legacy_no_orientation
 ```
 
-旧版目标计算：
+## Right Hand
 
-```text
-target_tcp.x = object_base.x - 0.04
-target_tcp.y = object_base.y - 0.10
-target_tcp.z = object_base.z + 0.02 + 0.35
-```
-
-`apps/grasp/run_visual_grasp_test.py` 单独运行时默认也使用同一套参数；
-除非明确测试新高度或指定 `--grasp-profile`，不要临时改 `--above-object-height`/offset。
-
-### 6.5 手掌
-
-手掌 q 顺序：
-
-```text
-[THUMB_MP, THUMB_CMC, INDEX, MIDDLE, RING, LITTLE]
-```
-
-打开：
+右手张开：
 
 ```bash
 rosservice call /zj_humanoid/hand/joint_switch/right "{q: [-0.1, 0.05, 0.35, 0.35, 0.35, 0.35]}"
 ```
 
-闭合抓塑料袋：
+右手闭合抓塑料袋：
 
 ```bash
 rosservice call /zj_humanoid/hand/joint_switch/right "{q: [0.5, 0.8, 0.84, 0.84, 0.35, 0.35]}"
 ```
-
-### 6.6 手指压力检查
 
 压力话题：
 
@@ -415,192 +249,67 @@ rosservice call /zj_humanoid/hand/joint_switch/right "{q: [0.5, 0.8, 0.84, 0.84,
 /zj_humanoid/hand/finger_pressures/right
 ```
 
-空手参考值接近 0：
+当前压力阈值采用“高于空手噪声即可继续”的策略：
 
 ```text
-[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+grasp_pressure_threshold = 0.00
 ```
 
-当前完整流程只用压力判断是否继续，不修改手掌 q，不做补夹。
+不做补夹，不修改手掌参数。
 
-```text
-抓取点闭合后: max_pressure >= 0.00
-QR 展示点:    max_pressure >= 0.00
-扫码后:       max_pressure >= 0.00
-```
-
-如果压力不足：
-
-```text
-当前位置 -> via1
--> 手掌打开
--> 重新低头锁存目标
--> 从 via1 经 via2/via3 重新去抓取点
-```
-
-默认最多重试 1 次。重试仍失败时：
-
-```text
-返回 via1->via0
-手掌保持打开
-流程结束并报错
-```
-
-如需临时关闭压力检查：
-
-```bash
---disable-pressure-checks
-```
-
-## 7. 当前数据文件
+## 关键 Pose 文件
 
 必须存在：
 
 ```text
-data/poses/mpc_via0_home_right.json
 data/poses/mpc_via1_pose_right.json
 data/poses/mpc_via2_pose_right.json
 data/poses/mpc_via3_pose_right.json
-data/poses/mpc_qr_present_pose_right.json
+data/poses/mpc_grasp_tuned_pose_right.json
 ```
 
-运行时生成/更新：
+说明：
 
 ```text
-data/runtime/mpc_locked_target_latest.json
-data/runtime/post_grasp_qr_latest.json
-data/samples/grasp_data_*.csv
+via1/via2/via3 是到抓取区域的安全路径。
+mpc_grasp_tuned_pose_right.json 只提供抓取姿态 orientation，不作为位置目标。
 ```
 
-`grasp_data_*.csv` 是一次性视觉检测日志。目标锁存成功后，抓取流程读取
-`mpc_locked_target_latest.json`，CSV 可以清理。
-
-`mpc_qr_present_pose_right.json` 是抓取后举到头部相机前扫码的展示点，已包含：
+## 抓取阶段流程
 
 ```text
-pose
-orientation
-mpc_state
-joint_num=23
+1. 设置 MPC running mode。
+2. MPC neck 低头。
+3. RealSense 采集图像。
+4. YOLO 检测塑料袋。
+5. 多帧连续性过滤，选择画面下半部中点附近的稳定目标。
+6. 取 bbox 上方 2/3 中点深度。
+7. camera -> HEAD -> BASE，保存锁存目标。
+8. MPC neck 抬头。
+9. 右手张开。
+10. via1 -> via2 -> via3。
+11. via3 -> 视觉抓取点，使用 tuned orientation。
+12. 右手闭合。
+13. 压力检查。
 ```
 
-## 8. 完整闭环操作
-
-### 8.1 每次新放置塑料袋后，完整运行
-
-先确认机器人端 `huimin1.4` 容器内已启动 9091 rosbridge：
-
-```bash
-source /opt/ros/noetic/setup.bash
-source /workspace/catkin_ws/mpc_ws/devel/setup.bash
-roslaunch rosbridge_server rosbridge_websocket.launch port:=9091
-```
-
-电脑端：
-
-```bash
-conda activate detect
-python apps/grasp/run_grasp_flow.py \
-  --ws-url ws://192.168.20.102:9091 \
-  --return-mode qr-present \
-  --scan-qr-after-present \
-  --qr-transport raw \
-  --qr-raw-throttle-ms 3000 \
-  --place-after-qr \
-  --max-z 1.70 \
-  --execute
-```
-
-完整流程默认不会弹出抓后 OCR/QR 识别窗口，避免后台扫码子进程阻塞退出。只有需要人工看扫码结果窗口时，才额外加：
-
-```bash
---show-qr-window
-```
-
-完整流程默认对锁存阶段启用轻量高光抑制：
+抓取阶段完成状态：
 
 ```text
---highlight-suppression mild
+右手持袋
+机器人在抓取点
+后续交给抓后识别或人工调试流程
 ```
 
-如果现场光照正常或该处理导致漏检，可回退：
+## 分段调试命令
 
-```bash
---highlight-suppression none
-```
-
-完整动作：
-
-```text
-低头锁存 -> 抬头
--> 手掌打开
--> via0 起步，发送 via1->via2->via3
--> via3->视觉抓取点
--> 手掌闭合
--> 压力检查
--> QR 展示点
--> 压力检查
--> 扫码
--> 压力检查
--> QR 展示点->via3
--> via3->视觉放置点上方
--> 手掌打开
--> via3->via2->via1->via0
-```
-
-压力失败时，流程会按 6.6 的策略返回 via1、重新锁存、重试一次。
-
-### 8.2 复用上一次锁存目标
-
-只有在塑料袋没有移动时使用：
-
-```bash
-python apps/grasp/run_grasp_flow.py \
-  --ws-url ws://192.168.20.102:9091 \
-  --skip-lock \
-  --return-mode qr-present \
-  --scan-qr-after-present \
-  --qr-transport raw \
-  --qr-raw-throttle-ms 3000 \
-  --place-after-qr \
-  --max-z 1.70 \
-  --execute
-```
-### 8.3 只抓取后停在 QR 展示点
-
-用于调试扫码，不放回：
-
-```bash
-python apps/grasp/run_grasp_flow.py \
-  --ws-url ws://192.168.20.102:9091 \
-  --return-mode qr-present \
-  --scan-qr-after-present \
-  --qr-transport raw \
-  --qr-raw-throttle-ms 3000 \
-  --max-z 1.70 \
-  --execute
-```
-
-## 9. 子任务操作
-
-### 9.1 只看头部相机和塑料袋检测
+只看头部相机/YOLO：
 
 ```bash
 python apps/grasp/test_yolo.py
 ```
 
-该脚本强制 GPU。窗口里会显示：
-
-```text
-YOLO 检测框
-抓取点
-深度 ROI
-深度值
-```
-
-如果报 CUDA 不可用，先修 GPU/driver/PyTorch，不要继续抓取。
-
-### 9.2 低头、识别、锁存、抬头
+只低头锁存：
 
 ```bash
 python apps/grasp/run_perception_lock.py \
@@ -608,827 +317,71 @@ python apps/grasp/run_perception_lock.py \
   --show-window
 ```
 
-白色塑料袋过亮时测试：
-
-```bash
-python apps/grasp/run_perception_lock.py \
-  --ws-url ws://192.168.20.102:9091 \
-  --show-window \
-  --highlight-suppression mild
-```
-
-输出：
-
-```text
-data/runtime/mpc_locked_target_latest.json
-```
-
-如果只想测试 neck：
-
-```bash
-python apps/grasp/run_perception_lock.py \
-  --ws-url ws://192.168.20.102:9091 \
-  --neck-only
-```
-
-### 9.3 via0 到 via3
+只走 via1->via2->via3：
 
 ```bash
 python apps/grasp/run_visual_grasp_test.py \
   --ws-url ws://192.168.20.102:9091 \
   --use-locked-target data/runtime/mpc_locked_target_latest.json \
-  --via-file data/poses/mpc_via0_home_right.json \
   --via-file data/poses/mpc_via1_pose_right.json \
   --via-file data/poses/mpc_via2_pose_right.json \
   --via-file data/poses/mpc_via3_pose_right.json \
   --stop-at-last-via \
-  --no-auto-lift \
   --use-joints \
   --max-motion 2.0 \
   --max-z 1.70 \
   --duration 5.0 \
+  --execute-delay 0 \
   --execute \
   --confirm-target
 ```
 
-### 9.4 via3 到视觉抓取点
+只从 via3 到抓取点：
 
 ```bash
 python apps/grasp/run_visual_grasp_test.py \
   --ws-url ws://192.168.20.102:9091 \
   --use-locked-target data/runtime/mpc_locked_target_latest.json \
   --include-descend \
-  --above-object-height 0.02 \
   --no-auto-lift \
-  --max-motion 2.0 \
+  --max-motion 1.2 \
   --max-z 1.70 \
   --duration 5.0 \
+  --execute-delay 0 \
   --execute \
   --confirm-target
 ```
 
-### 9.5 抓取点到 QR 展示点
-
-抓住后执行：
-
-```bash
-python apps/grasp/run_visual_grasp_test.py \
-  --ws-url ws://192.168.20.102:9091 \
-  --use-locked-target data/runtime/mpc_locked_target_latest.json \
-  --via-file data/poses/mpc_qr_present_pose_right.json \
-  --stop-at-last-via \
-  --no-auto-lift \
-  --use-joints \
-  --max-motion 2.0 \
-  --max-z 1.70 \
-  --duration 5.0 \
-  --execute \
-  --confirm-target
-```
-
-### 9.6 抓后 OCR/二维码识别
-
-定位阶段使用 compressed 图像保证帧率；抓后识别阶段使用低频 raw 图像，避免压缩损伤标签文字和二维码边缘。
-完整流程默认在 QR 展示点先保存 5 张 raw 快照，然后立刻让机器人继续后续动作；OCR/QR 解码在后台子进程继续执行，不阻塞机器人运动。
-
-默认策略：
-
-```text
-transport = raw
-raw throttle = 3000ms
-snapshot attempts = 5
-prefer OCR = true
-fallback OCR = PaddleOCR PP-OCRv4
-fallback QR = lightweight
-```
-
-全流程里不需要单独调用本脚本；`apps/grasp/run_grasp_flow.py --scan-qr-after-present` 会自动调用。
-
-单独调试入口：
-
-```bash
-python apps/grasp/run_post_grasp_qr_scan.py \
-  --ws-url ws://192.168.20.102:9091 \
-  --transport raw \
-  --raw-throttle-ms 3000 \
-  --snapshot-attempts 5
-```
-
-输出：
-
-```text
-data/runtime/post_grasp_qr_latest.json
-data/runtime/qr_multiframe_debug/latest_raw/raw/raw_001.png ...
-```
-
-### 9.6.1 OCR 标签文字识别
-
-OCR 是二维码之外的独立识别模块，目标是识别塑料袋白色药品标签上的文字。
-当前默认接入抓后识别流程：
-
-```text
-小模型 OCR
--> 不通过则 PP-OCRv4 fallback
--> 不通过则轻量 QR fallback
-```
-
-小模型 OCR 速度快，作为第一优先级；PP-OCRv4 更稳但较慢，只在小模型失败时加载；QR 作为最后兜底。
-
-核心模块和模型：
-
-```text
-robot_grasp/vision/ocr_detector.py
-models/ocr/ch_PP-OCRv6_rec_small.onnx
-models/ocr/ch_PP-OCRv3_det.onnx
-models/ocr/ppocrv6_dict.txt
-models/ocr/ppocr_keys_v1.txt
-models/ocr/ESPCN_x2.pb
-models/ocr/LapSRN_x2.pb
-```
-
-PP-OCRv4 fallback 使用 PaddleOCR 官方模型，首次运行会下载模型缓存。默认缓存路径由运行环境决定；若在受限环境下运行，建议设置：
-
-```bash
-export HOME=/tmp
-export PADDLE_HOME=/tmp/paddle
-export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
-export FLAGS_use_mkldnn=false
-```
-
-代码中已默认禁用 MKLDNN，避免 Paddle oneDNN 后端在当前环境报错。
-
-调试入口：
-
-```bash
-python tools/debug/debug_ocr_image.py <图片路径>
-python tools/debug/debug_ocr_webcam.py 0
-python robot_grasp/vision/ocr_detector.py
-```
-
-当前 OCR 管线：
-
-```text
-QR 展示点 raw 快照
--> 可选 YOLO 塑料袋 ROI
--> 在塑料袋 ROI 内定位白色药品标签小区域
--> 裁剪标签小图
--> 4x LANCZOS4 放大
--> PP-OCRv3 det ONNX 检测文字框
--> 检测失败时水平投影分行回退
--> PP-OCRv6 small rec ONNX 识别
--> CTC 解码
--> OCR 词典纠错
--> 若小模型未通过，则运行 PaddleOCR PP-OCRv4
--> 若 PP-OCRv4 未通过，则运行轻量 QR
-```
-
-当前已验证结论：
-
-```text
-1. 在 data/runtime/qr_multiframe_debug/latest_raw/raw/ 的本地 raw 图上可以识别文字。
-2. 医院名、病区名通过词典纠错后较稳定。
-3. 住院号、床号、日期等数字类文本仍可能有小误差。
-4. 日期/数字类文本不做模糊纠错，避免把真实编号改错。
-5. PP-OCRv4 能更稳定读出姓名、床位、病区关键字，但病区数字仍可能有小误差。
-```
-
-OCR 判定默认比较保守：
-
-```text
-ocr_min_conf = 0.60
-ocr_detector_conf = 0.10
-ocr_min_text_len = 2
-ocr_min_results = 2
-ocr_upscale = 4.0
-ocr_label_crop = true
-ocr_target = ward
-paddle_ocr_fallback = true
-paddle_ocr_min_results = 1
-```
-
-默认只接受病区字段。病区目录来自 `configs/ocr/ward_directory.json`，
-该文件由医院完整目录 Excel 导入生成，不再维护硬编码病区兜底。
-`用法`、`外用`、出生日期、剂量等文本不会让 OCR 判定成功。
-如果小模型 OCR 输出不满足阈值/格式，流程会自动 fallback 到 PP-OCRv4；PP-OCRv4 仍未通过时，再 fallback 到轻量 QR。
-
-当前 OCR 默认使用 CPU ONNX Runtime，避免不同电脑 CUDA runtime 不一致导致失败。
-如果确认本机 ONNX Runtime GPU 依赖完整，可手动开启：
-
-```bash
-OCR_USE_CUDA=1 python tools/debug/debug_ocr_image.py <图片路径>
-```
-
-当前有效设置和结论：
-
-```text
-1. raw 原图比压缩图更适合 OCR。
-2. 先定位白色标签小区域，再 OCR，比直接扫整袋 ROI 稳定。
-3. 如果画面中有两张贴纸，优先使用 QR 定位点锚定带二维码的贴纸。
-4. 4x LANCZOS4 放大是当前相对稳定的设置。
-5. PP-OCRv3 det 能检测文字框。
-6. PP-OCRv6 small 对小字有误识别，但配合词典纠错可用。
-7. CLAHE、锐化、OTSU 二值化、minAreaRect 纠偏在当前样本上效果不好。
-8. GOT-OCR 2.0 重模型旧测试没有解决 30px 小字问题，暂不迁入。
-9. 日期/数字类文本不做模糊纠错，避免把真实编号改错。
-10. 医院名/机构名不参与病区模糊纠错，避免被误改成病区名。
-11. PP-OCRv4 是增强 fallback，不替代二维码的精确结果；如果后续需要精确绑定病人或药袋，仍应优先使用 QR/条码结果。
-```
-
-纠错策略位于：
-
-```text
-robot_grasp/vision/ocr_detector.py
-  WARD_DIRECTORY_PATH
-  _load_ward_directory()
-  _WARD_LIST
-  _OCR_DICT
-  _ocr_correct()
-```
-
-病区目录维护命令：
-
-```bash
-conda activate detect
-python tools/maintenance/import_ward_directory.py \
-  --source /home/hmit/Downloads/病区对应关系.xls
-```
-
-导入后会生成：
-
-```text
-configs/ocr/ward_directory.json              OCR 运行时读取的病区字典
-configs/ocr/ward_directory_source_20260812.xls 原始 Excel 备份
-```
-
-维护原则：
-
-```text
-1. 医院名、病区名可以做模糊纠错。
-2. 数字占比高的 ID、住院号、床号不做病区纠错。
-3. 包含 "/" 的日期类文本不做词典替换。
-4. 词典替换要求候选文本长度不能明显短于原文本，避免长文本被截断。
-```
-
-当前瓶颈：
-
-```text
-1. 30-50cm 距离下，标签文字在 1280x720 图中高度只有约 30px。
-2. 通用 OCR 模型字符集很大，对模糊小字容错有限。
-3. 插值放大只能改善检测，不能恢复真实笔画细节。
-```
-
-后续提升优先级：
-
-```text
-1. 抓后把标签举得更近、更正、更清晰。
-2. 多帧采样后做 OCR 共识。
-3. 标注 20-50 张现场图片，训练小字符集专用 OCR 模型。
-4. 必要时换更高分辨率或更短焦距成像方案。
-```
-
-专用 OCR 模型方向：
-
-```text
-架构: CRNN + CTC
-输入: 48x160 或按现场文字行宽调整
-字典: 从现场药袋标签提取，约数百字符
-数据: 20-50 张现场图片起步
-标注工具: tools/debug/label_ocr_dataset.py
-```
-
-### 9.7 QR 展示点回 via0
-
-如果当前在 QR 展示点，需要安全恢复：
-
-```bash
-rosservice call /zj_humanoid/hand/joint_switch/right "{q: [-0.1, 0.05, 0.35, 0.35, 0.35, 0.35]}"
-```
-
-然后：
-
-```bash
-python apps/grasp/run_visual_grasp_test.py \
-  --ws-url ws://192.168.20.102:9091 \
-  --use-locked-target data/runtime/mpc_locked_target_latest.json \
-  --via-file data/poses/mpc_via3_pose_right.json \
-  --via-file data/poses/mpc_via2_pose_right.json \
-  --via-file data/poses/mpc_via1_pose_right.json \
-  --via-file data/poses/mpc_via0_home_right.json \
-  --stop-at-last-via \
-  --no-auto-lift \
-  --use-joints \
-  --max-motion 3.0 \
-  --max-z 1.70 \
-  --duration 5.0 \
-  --execute \
-  --confirm-target
-```
-
-## 10. 记录新 via 点
-
-记录当前右手 MPC pose：
+记录右手单臂 pose：
 
 ```bash
 python tools/capture/capture_mpc_pose.py \
   --ws-url ws://192.168.20.102:9091 \
   --arm right \
   --include-joints \
-  --output data/<name>.json
+  --output data/poses/<name>.json
 ```
 
-必须加：
+## 抓取失败处理
 
-```bash
---include-joints
-```
-
-原因：`points_seq_tracking_with_joints` 需要 pose 和 mpc_state 同时存在。
-
-如果要记录新的 QR 展示点：
-
-```bash
-python tools/capture/capture_mpc_pose.py \
-  --ws-url ws://192.168.20.102:9091 \
-  --arm right \
-  --include-joints \
-  --output data/poses/mpc_qr_present_pose_right.json
-```
-
-记录前可以进入试教摆位，但要先停 MPC：
-
-```bash
-rosservice call /wa/tracking_stop "{}"
-rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: false"
-rosservice call /zj_humanoid/upperlimb/unlock
-rosservice call /zj_humanoid/upperlimb/teach_mode/enter "arm_type: 2"
-```
-
-摆好后：
-
-```bash
-rosservice call /zj_humanoid/upperlimb/teach_mode/exit "arm_type: 2"
-rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: true"
-```
-
-然后再记录 pose。
-
-## 11. 完整复位
-
-如果需要整机复位，当前已确认：
-
-```bash
-rosservice call /zj_humanoid/upperlimb/go_home/whole_body "arm_type: 15"
-rosservice call /zj_humanoid/upperlimb/go_down/dual_arm
-```
-
-注意：这不是抓取流程里的回收动作。正常抓取结束用 `via3->2->1->0`，不要直接 go_down。
-
-## 12. 常见问题
-
-### 12.1 `Unable to load the manifest for package mpc_target`
-
-原因：rosbridge 进程没有 source MPC 工作空间。
-
-处理：重启 rosbridge，并确认启动前执行：
-
-```bash
-source /opt/ros/noetic/setup.bash
-source /workspace/catkin_ws/mpc_ws/devel/setup.bash
-```
-
-### 12.2 md5sum mismatch
-
-原因：电脑端看到的 service 定义和机器人端 service 定义不一致，或 rosbridge 启动环境还是旧的。
-
-处理：
-
-```bash
-rossrv md5 mpc_target/PointsSeqTracking
-rossrv md5 mpc_target/PointsSeqTrackingWithJoints
-```
-
-确认 `mpc_target`、`ocs2_msgs`、`mpc_hardware_interface` 都是当前版本，重新 build/source/restart rosbridge。
-
-### 12.3 `Not in run mode`
-
-打开 MPC mode：
-
-```bash
-rosservice call /wa/wa_hardware_interface/mpc_mode_setting "data: true"
-```
-
-### 12.4 `Left and right poses size mismatch`
-
-MPC 的左右手 PoseArray 长度必须一致。当前脚本会给保持不动侧补相同数量 pose。如果手写请求，要特别注意。
-
-### 12.5 `目标超出 workspace`
-
-QR 展示点高度较高，必须加：
-
-```bash
---max-z 1.70
-```
-
-这是脚本保守检查，不是 MPC 本体错误。
-
-### 12.6 CUDA 不可用
-
-检查：
-
-```bash
-nvidia-smi
-python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
-```
-
-不要用 `--allow-cpu-detect` 跑正式抓取。CPU 只适合临时排查。
-
-### 12.7 低头后没有画面或没检测到
-
-先单独运行：
-
-```bash
-python apps/grasp/test_yolo.py
-```
-
-检查：
+压力检查失败时：
 
 ```text
-1. 头部相机是否有画面。
-2. 塑料袋是否在视野内。
-3. bbox 是否框到塑料袋。
-4. 抓取点是否落在正确区域。
-5. 深度是否有效。
+1. 不补夹。
+2. 不改手掌 q。
+3. 回 via1。
+4. 打开手掌。
+5. 重新低头锁存。
+6. 最多重试一次。
 ```
 
-### 12.8 从 QR 点直接到放置点姿态异常
-
-不要直连。当前完整流程已经改为：
+## 禁止事项
 
 ```text
-QR 展示点 -> via3 -> 视觉放置点上方
-```
-
-其中 `QR 展示点 -> via3` 使用 joints 约束，降低姿态异常风险。
-
-## 13. 禁止事项
-
-```text
-1. 不要把相机坐标直接发给 MPC。
-2. 不要恢复或混入已删除的 SDK 手臂路线。
-3. 不要在未确认 rosbridge source mpc_ws 的情况下执行 MPC service。
-4. 不要默认使用 --combine-approach。
-5. 不要用旧 CSV 配新 HEAD TF 重算目标。
-6. 不要跳过 --max-z 1.70 执行 QR 展示点相关路径。
-7. 不要在桌面阶段强依赖 QR，二维码应抓后近距离识别。
-8. 不要直接 go_down 回收正在桌面附近的手臂。
-```
-
-## 14. 推荐调试顺序
-
-新同事第一次调试不要直接跑完整闭环。按顺序：
-
-```text
-1. nvidia-smi 和 torch CUDA 检查。
-2. 启动 rosbridge 9091。
-3. python tools/debug/debug_mpc_interfaces.py 确认 MPC 接口。
-4. python apps/grasp/test_yolo.py 确认画面和塑料袋 bbox。
-5. python apps/grasp/run_perception_lock.py --show-window 锁存目标。
-6. dry-run 从 via0 起步，发送 via1->2->3。
-7. execute 从 via0 起步，发送 via1->2->3。
-8. dry-run via3->抓取点。
-9. execute via3->抓取点。
-10. 手掌闭合测试。
-11. 抓取点->QR 展示点。
-12. 扫码。
-13. 如需 OCR，先用本地图片入口验证标签文字识别。
-14. QR->via3->放置点上方->松手->3->2->1->0。
-15. 最后再跑完整闭环。
-```
-
-## 15. 当前一键命令
-
-完整闭环：
-
-```bash
-conda activate detect
-python apps/grasp/run_grasp_flow.py \
-  --ws-url ws://192.168.20.102:9091 \
-  --return-mode qr-present \
-  --scan-qr-after-present \
-  --qr-transport raw \
-  --qr-raw-throttle-ms 3000 \
-  --place-after-qr \
-  --max-z 1.70 \
-  --execute
-```
-
-复用锁存目标：
-
-```bash
-python apps/grasp/run_grasp_flow.py \
-  --ws-url ws://192.168.20.102:9091 \
-  --skip-lock \
-  --return-mode qr-present \
-  --scan-qr-after-present \
-  --qr-transport raw \
-  --qr-raw-throttle-ms 3000 \
-  --place-after-qr \
-  --max-z 1.70 \
-  --execute
-```
-
-## 16. 重大问题与解决方案记录
-
-本节记录项目中已经遇到过、影响较大的问题。新同事排障时优先查这里。
-
-### 16.1 rosbridge 能连接但 service 调用失败
-
-现象：
-
-```text
-Unable to load the manifest for package mpc_target
-client wants service ... md5sum ... but it has ...
-```
-
-原因：
-
-```text
-rosbridge 所在容器没有 source 正确的 mpc_ws，或 mpc_target/ocs2_msgs/mpc_hardware_interface
-消息包版本和机器人 MPC 后端不一致。
-```
-
-解决：
-
-```bash
-source /opt/ros/noetic/setup.bash
-source /workspace/catkin_ws/mpc_ws/devel/setup.bash
-roslaunch rosbridge_server rosbridge_websocket.launch port:=9091
-```
-
-确认：
-
-```bash
-rosservice call /rosapi/service_type "service: /wa/points_seq_tracking"
-rosservice call /rosapi/service_type "service: /wa/points_seq_tracking_with_joints"
-```
-
-### 16.2 不能混用 SDK 手臂路线和 MPC 手臂路线
-
-现象：
-
-```text
-SDK 点位和 MPC 点位看似都能动，但组合后姿态和坐标不一致。
-```
-
-结论：
-
-```text
-当前项目只保留 MPC 手臂路线。
-手臂移动、via 点、抓取点、QR 展示点、放置点全部走 MPC。
-手掌 joint_switch 可以在 MPC mode 开启时直接调用。
-```
-
-### 16.3 MPC 头部控制可用，但要避开过低角度
-
-现象：
-
-```text
-neck_movej 返回 success，但实际 Neck_Y 偏差较大；抬头时卡顿。
-```
-
-结论：
-
-```text
-0.40 附近在部分零位状态下接近限位或容易卡顿。
-当前统一使用 neck-down-y = 0.35。
-如现场需要更低视角，先单独 neck-only 测试，不要直接跑完整流程。
-```
-
-### 16.4 RealSense 没有图像或窗口黑屏
-
-现象：
-
-```text
-rgb=0/raw_rgb=0/depth=0/camera_info=0
-窗口黑屏
-```
-
-解决：
-
-```bash
-rosservice call /zj_humanoid/sensor/realsense_head/restart
-```
-
-当前 `apps/grasp/test_yolo.py` 已带图像流检查和 restart 逻辑。完整流程前若无画面，先运行：
-
-```bash
-python apps/grasp/test_yolo.py
-```
-
-### 16.5 TF 缺失导致不能锁存 BASE 坐标
-
-现象：
-
-```text
-TF 中没有找到 BASE -> HEAD，不能锁存 BASE 目标
-```
-
-排查：
-
-```bash
-rostopic list | grep -E '^/tf$|^/tf_static$'
-rosservice call /rosapi/topics "{}" | grep -E '/tf|/tf_static'
-```
-
-处理：
-
-```text
-确认 rosbridge 连接的是同一个 ROS_MASTER_URI，并且机器人 TF 正常发布。
-锁存必须在低头 TF 可用时完成；不要用旧 CSV 配新的头部姿态重算。
-```
-
-### 16.6 CUDA / PyTorch 环境不匹配
-
-现象：
-
-```text
-CUDA error: no kernel image is available for execution on the device
-torch.cuda.is_available() == False
-nvidia-smi 无法通信
-```
-
-处理：
-
-```text
-不要安装 CPU 版 torch。
-detect 环境必须能看到 GPU。
-不同电脑 GPU 架构不同，requirements.txt 不强绑定特定 torch wheel。
-先按 README 安装通用依赖，再按本机 CUDA/GPU 安装对应 PyTorch。
-```
-
-检查：
-
-```bash
-nvidia-smi
-python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
-```
-
-### 16.7 手眼矩阵和抓取 z offset
-
-结论：
-
-```text
-当前使用矩阵：
-data/calibration/cam2head_vendor_new_20260803.json
-
-当前 TCP z 补偿：
-offset_z = 0.35
-```
-
-说明：
-
-```text
-塑料袋 bbox 深度点不等于最终夹爪 TCP 接触点。
-当前 z=0.35 是实机抓取校准后的补偿量，不要临时改。
-```
-
-### 16.8 抓取开始阶段身体扭动
-
-现象：
-
-```text
-机器人为了达到末端姿态，先出现全身扭动或抬高手臂，再进入 via 路径。
-```
-
-处理：
-
-```text
-via1/via2/via3 使用 points_seq_tracking_with_joints 和记录的 MPC joints 约束。
-不要默认使用 --combine-approach。
-不要额外启用自动抬高逻辑；已经有安全 via 点。
-```
-
-### 16.9 抓取姿态和 offset
-
-当前保留两套抓取 profile：
-
-```text
-tuned_with_orientation:
-  带抓取姿态，当前完整流程默认使用。
-
-legacy_no_orientation:
-  不带抓取姿态，用于放置阶段和回退测试。
-```
-
-注意：
-
-```text
-抓取阶段必须先到物体上方，再下降到抓取点。
-如果先接触塑料袋再旋转手腕，会把塑料袋推走。
-```
-
-### 16.10 QR/OCR 扫描不稳定
-
-问题：
-
-```text
-手机能扫，但 OpenCV/pyzbar/zxing 对斜角、模糊、压缩图不稳定。
-```
-
-当前方案：
-
-```text
-QR 展示点采集 5 张 raw 快照。
-优先小 OCR 识别标签。
-小 OCR 不通过 -> PP-OCRv4 fallback。
-PP-OCRv4 不通过 -> 轻量 QR fallback。
-```
-
-保存位置：
-
-```text
-data/runtime/qr_multiframe_debug/latest_raw/raw
-data/runtime/post_grasp_qr_latest.json
-```
-
-原则：
-
-```text
-识别过程不弹窗口，不阻塞机器人动作。
-需要离线排查时，使用保存的 raw 快照。
-```
-
-### 16.11 压力检查阈值不要随意抬高
-
-历史问题：
-
-```text
-塑料袋抓住后压力值可能只有 0.1~0.2，阈值设太高会误判掉落。
-```
-
-当前默认：
-
-```text
-抓取点闭合后: max_pressure >= 0.00
-QR 展示点:    max_pressure >= 0.00
-扫码后:       max_pressure >= 0.00
-```
-
-说明：
-
-```text
-压力目前只作为弱保护信号。
-不要根据单次读数随意提高阈值。
-```
-
-### 16.12 多塑料袋和偶发 FP
-
-问题：
-
-```text
-多袋同画面时，最高置信度不一定是想抓的袋子。
-锁存阶段偶尔会出现几帧 FP。
-```
-
-当前处理：
-
-```text
-锁存阶段先做多帧连续性过滤。
-多个稳定目标时，选择 bbox 中心最靠近画面下半部中点的目标。
-最终锁存目标在窗口中用粗红框 LOCK 标出。
-```
-
-相关参数：
-
-```bash
---min-lock-hits 3
---lock-match-distance 0.12
---lock-target-policy image_center
-```
-
-### 16.13 白色塑料袋过曝
-
-问题：
-
-```text
-白色塑料袋过亮时，YOLO bbox 可能不稳定。
-```
-
-当前处理：
-
-```text
-完整流程默认启用轻量高光抑制：
---highlight-suppression mild
-```
-
-回退：
-
-```bash
---highlight-suppression none
-```
-
-说明：
-
-```text
-该处理只影响锁存阶段 YOLO 输入帧，不影响深度、坐标转换、MPC 运动参数。
+1. 不要恢复 SDK 手臂路线。
+2. 不要在 grasp.md 维护 OCR/QR、导航、货架放置或箱子拉出流程。
+3. 不要随意修改已固定 offset/profile，除非现场重新验证。
+4. 不要用旧 CSV 配新的头部姿态重算目标。
+5. 不要提交 data/samples/grasp_data_*.csv 运行样本，除非明确作为离线样本。
+6. 不要提交大模型权重到 GitHub 普通仓库。
 ```

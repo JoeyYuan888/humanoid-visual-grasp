@@ -218,6 +218,14 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def append_valid_grasp_history(output_dir: Path, result: dict[str, Any]) -> None:
+    if not result.get("valid"):
+        return
+    history_path = output_dir / "valid_grasp_points_history.jsonl"
+    with history_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(result, ensure_ascii=False) + "\n")
+
+
 def invalid_grasp_result(reason: str, sequence: int) -> dict[str, Any]:
     return {
         "valid": False,
@@ -238,6 +246,7 @@ def publish_grasp_points(output_dir: Path, result: dict[str, Any]) -> None:
     """Publish coordinates and per-point occlusion using atomic files."""
     atomic_json(output_dir / "latest_grasp_points.json", result)
     if result.get("valid"):
+        append_valid_grasp_history(output_dir, result)
         # Kept for post-run inspection only.  Robot code must consume the
         # fail-closed latest files below, never this diagnostic snapshot.
         atomic_json(output_dir / "last_valid_grasp_points_DIAGNOSTIC_ONLY.json", result)
@@ -318,6 +327,11 @@ def main() -> int:
     symmetry = np.repeat(np.eye(4, dtype=np.float32)[None], 2, axis=0)
     symmetry[1, 0, 0] = symmetry[1, 1, 1] = -1
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    history_path = args.output_dir / "valid_grasp_points_history.jsonl"
+    try:
+        history_path.unlink()
+    except FileNotFoundError:
+        pass
     publish_grasp_points(
         args.output_dir,
         invalid_grasp_result("PROCESS_INITIALIZING", -1),

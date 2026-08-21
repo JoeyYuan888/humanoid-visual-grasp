@@ -6,7 +6,13 @@
 grasp -> transport -> navigation -> place
 ```
 
-当前已跑通的是 `grasp` 阶段，其中包含抓取后的 OCR/QR 识别和临时放回抓取点。
+当前已经跑通并固定参数的阶段：
+
+```text
+grasp -> post-grasp OCR/QR -> place
+```
+
+`transport` 阶段正在开发；`navigation` 阶段暂未接入主流程。
 
 ## Recommended Reading Order
 
@@ -16,28 +22,36 @@ grasp -> transport -> navigation -> place
 
 2. `docs/grasp.md`
 
-   当前已跑通的 MPC 视觉抓取闭环细节。
+   塑料袋抓取阶段细节，只到右手抓住塑料袋为止。
 
-3. `docs/flowchart.md`
+3. `docs/post_grasp_identification.md`
+
+   抓后 OCR/QR 识别。
+
+4. `docs/place.md`
+
+   货架箱子 AprilTag 定位、拉出、投放、推回。
+
+5. `docs/flowchart.md`
 
    完整流程图。
 
-4. `docs/troubleshooting.md`
+6. `docs/troubleshooting.md`
 
    重大问题和解决方案。
 
-5. `docs/transport.md`
+7. `docs/transport.md`
 
-   后续双手搬运盒子阶段设计边界。
+   双手搬运盒子阶段设计边界。
 
-6. `docs/navigation.md` / `docs/place.md`
+8. `docs/navigation.md`
 
-   后续导航和独立放置阶段设计边界。
+   导航阶段设计边界。
 
 ## 当前闭环
 
 ```text
-识别塑料袋 -> MPC 抓取 -> 举到头部相机前扫码 -> 放回抓取点 -> via3->2->1->0 回收
+塑料袋锁存 -> MPC 抓取 -> 抓后 OCR/QR -> 人工/导航到货架前 -> AprilTag 放置
 ```
 
 ## Code Entrypoints
@@ -56,10 +70,10 @@ apps/grasp/
 apps/transport/
 ```
 
-当前已接入第一步只读检测：
+当前已接入运输阶段箱子识别/靠近/夹紧测试：
 
 ```bash
-python apps/transport/run_box_grasp_point.py --ws-url ws://192.168.20.102:9091 --show-window
+python apps/transport/run_transport_flow.py --ws-url ws://192.168.20.102:9091 --backend foundationpose --execute
 ```
 
 ## Reference Materials

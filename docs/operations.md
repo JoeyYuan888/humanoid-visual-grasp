@@ -20,7 +20,6 @@ python apps/grasp/run_grasp_flow.py \
   --scan-qr-after-present \
   --qr-transport raw \
   --qr-raw-throttle-ms 3000 \
-  --place-after-qr \
   --max-z 1.70 \
   --execute
 ```
@@ -49,3 +48,11 @@ data/calibration/cam2head_vendor_new_20260803.json
 ```
 
 Detailed parameter explanations are in `docs/grasp.md`.
+
+Stage-specific details:
+
+```text
+docs/grasp.md                     塑料袋抓取
+docs/post_grasp_identification.md 抓后 OCR/QR
+docs/place.md                     货架放置
+```

@@ -7,6 +7,7 @@ Output schema is intentionally compatible with lock_box_grasp_target.py.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import subprocess
@@ -23,12 +24,18 @@ from twisted.python import log as twisted_log
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 FOUNDATIONPOSE_ROOT = PROJECT_ROOT / "third_party" / "foundationpose_crate"
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "transport" / "box_grasp_target_latest.json"
+DEFAULT_BASE_OUTPUT = PROJECT_ROOT / "data" / "runtime" / "transport_box_grasp_target_latest.json"
 DEFAULT_DEBUG_DIR = PROJECT_ROOT / "data" / "transport" / "foundationpose_box_grasp_debug_latest"
 MPC_MODE_SERVICE = "/wa/wa_hardware_interface/mpc_mode_setting"
 NECK_SERVICE = "/wa/wa_hardware_interface/neck_movej"
 JOINT_STATES_TOPIC = "/zj_humanoid/upperlimb/joint_states"
+
+from apps.grasp.visual_grasp_test_impl import DEFAULT_CAM2HEAD, _load_transform, _lookup_transform, _sample_tf
+from apps.transport.lock_box_grasp_target import _camera_obj_to_base, _valid_objects
 
 
 def _suppress_roslibpy_shutdown_noise() -> None:
@@ -156,6 +163,61 @@ def _safe_terminate(client: roslibpy.Ros | None) -> None:
         pass
 
 
+def _lock_payload_to_base(
+    client: roslibpy.Ros,
+    payload: dict,
+    output_path: Path,
+    cam2head_path: str,
+    tf_seconds: float,
+) -> None:
+    objects = _valid_objects(payload)
+    sides = {obj.get("side") for obj in objects}
+    if "left" not in sides or "right" not in sides:
+        raise RuntimeError(f"缺少有效左右抓取点，不能换算 BASE: sides={sorted(s for s in sides if s)}")
+
+    print(f"[动作] 采样 TF/转换 BASE 抓取点开始 tf={tf_seconds:.1f}s", flush=True)
+    cam2head = _load_transform(cam2head_path, "cam2head")
+    transforms = _sample_tf(client, tf_seconds)
+    head_to_base = _lookup_transform(transforms, "BASE", "HEAD")
+    if head_to_base is None:
+        raise RuntimeError("TF 中没有找到 BASE -> HEAD，不能锁存盒子 BASE 抓取点")
+
+    locked_objects = [_camera_obj_to_base(obj, cam2head, head_to_base) for obj in objects]
+    by_side = {obj["side"]: obj for obj in locked_objects}
+    output = {
+        "type": "box_grasp_points_base",
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "input": str(payload.get("output_path", "")),
+        "cam2head": str(cam2head_path),
+        "frame": "BASE",
+        "objects": locked_objects,
+        "left": {
+            "camera": by_side["left"]["camera_m"],
+            "head": by_side["left"]["head_m"],
+            "base": by_side["left"]["base_m"],
+        },
+        "right": {
+            "camera": by_side["right"]["camera_m"],
+            "head": by_side["right"]["head_m"],
+            "base": by_side["right"]["base_m"],
+        },
+        "note": "Locked BASE box grasp points. Reuse after neck pose changes; do not recompute from old camera points with a different HEAD TF.",
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(output, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"[✓] 已锁存盒子 BASE 抓取点: {output_path}", flush=True)
+    print(
+        f"    left base : [{by_side['left']['base_m'][0]:.4f}, "
+        f"{by_side['left']['base_m'][1]:.4f}, {by_side['left']['base_m'][2]:.4f}]",
+        flush=True,
+    )
+    print(
+        f"    right base: [{by_side['right']['base_m'][0]:.4f}, "
+        f"{by_side['right']['base_m'][1]:.4f}, {by_side['right']['base_m'][2]:.4f}]",
+        flush=True,
+    )
+
+
 def _bbox_from_polygon(points: list[list[float]] | None) -> list[float] | None:
     if not points:
         return None
@@ -200,25 +262,23 @@ def _apply_occluded_height_fallback(objects: list[dict]) -> list[dict]:
     if left is None or right is None:
         return []
 
-    pairs = [(left, right), (right, left)]
     corrections = []
-    for obj, reference in pairs:
-        if obj.get("occluded") is True and reference.get("occluded") is False:
-            old_z = obj["z_mm"]
-            obj["z_mm"] = reference["z_mm"]
-            obj["height_source"] = "fallback_from_unoccluded_side"
-            obj["height_reference_side"] = reference["side"]
-            obj["height_original_z_mm"] = old_z
-            obj["height_corrected_z_mm"] = obj["z_mm"]
-            corrections.append(
-                {
-                    "side": obj["side"],
-                    "reference_side": reference["side"],
-                    "old_z_mm": old_z,
-                    "new_z_mm": obj["z_mm"],
-                    "reason": "side_occluded",
-                }
-            )
+    average_z = round((float(left["z_mm"]) + float(right["z_mm"])) * 0.5, 1)
+    for obj in (left, right):
+        old_z = obj["z_mm"]
+        obj["z_mm"] = average_z
+        obj["height_source"] = "average_valid_sides"
+        obj["height_original_z_mm"] = old_z
+        obj["height_corrected_z_mm"] = obj["z_mm"]
+        corrections.append(
+            {
+                "side": obj["side"],
+                "old_z_mm": old_z,
+                "new_z_mm": obj["z_mm"],
+                "reason": "average_valid_left_right",
+                "occluded": obj.get("occluded"),
+            }
+        )
     return corrections
 
 
@@ -231,7 +291,74 @@ def _has_valid_left_right(grasp: dict) -> bool:
     return "left" in sides and "right" in sides
 
 
-def _load_best_grasp_points(output_dir: Path) -> tuple[dict, Path]:
+def _side_points(grasp: dict) -> dict[str, dict]:
+    by_side = {}
+    for index, point in enumerate(grasp.get("points_left_to_right") or []):
+        side = point.get("image_slot") or ("left" if index == 0 else "right")
+        if point.get("coordinate_valid") is True:
+            by_side[side] = point
+    return by_side
+
+
+def _load_valid_grasp_history(output_dir: Path) -> list[dict]:
+    history_path = output_dir / "valid_grasp_points_history.jsonl"
+    if not history_path.exists():
+        return []
+    history = []
+    for line in history_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            grasp = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if _has_valid_left_right(grasp):
+            history.append(grasp)
+    return history
+
+
+def _average_grasp_history(history: list[dict], average_frames: int) -> tuple[dict, Path | None]:
+    selected = history[-max(1, int(average_frames)) :]
+    base = copy.deepcopy(selected[-1])
+    point_map = _side_points(base)
+    frame_count_by_side: dict[str, int] = {}
+    for side in ("left", "right"):
+        samples = []
+        for grasp in selected:
+            point = _side_points(grasp).get(side)
+            if not point:
+                continue
+            camera_m = point.get("point_camera_m") or point.get("cad_midpoint_in_camera_m")
+            if camera_m is None or len(camera_m) != 3:
+                continue
+            samples.append([float(value) for value in camera_m])
+        if not samples or side not in point_map:
+            continue
+        mean = np.asarray(samples, dtype=np.float64).mean(axis=0).tolist()
+        point_map[side]["point_camera_m"] = mean
+        point_map[side]["source"] = "averaged_valid_frames"
+        point_map[side]["average_frame_count"] = len(samples)
+        point_map[side]["average_source"] = "valid_grasp_points_history.jsonl"
+        frame_count_by_side[side] = len(samples)
+    base["valid_average_frame_count"] = len(selected)
+    base["valid_average_frame_count_by_side"] = frame_count_by_side
+    base["selection_policy"] = "average_recent_valid_frames"
+    base["reason_codes"] = list(base.get("reason_codes") or [])
+    return base, None
+
+
+def _load_best_grasp_points(output_dir: Path, average_frames: int) -> tuple[dict, Path]:
+    history = _load_valid_grasp_history(output_dir)
+    if history:
+        averaged, _ = _average_grasp_history(history, average_frames)
+        history_path = output_dir / "valid_grasp_points_history.jsonl"
+        print(
+            f"[✓] 使用最近 {averaged.get('valid_average_frame_count')} 帧 valid FoundationPose 抓取点平均",
+            flush=True,
+        )
+        return averaged, history_path
+
     latest_path = output_dir / "latest_grasp_points.json"
     if not latest_path.exists():
         raise RuntimeError(f"FoundationPose did not write grasp points: {latest_path}")
@@ -269,7 +396,7 @@ def _load_camera_info(camera_matrix_path: Path, latest_image: Path) -> dict:
 
 
 def _convert_foundationpose_output(output_dir: Path, output_path: Path, args: argparse.Namespace) -> dict:
-    grasp, grasp_path = _load_best_grasp_points(output_dir)
+    grasp, grasp_path = _load_best_grasp_points(output_dir, args.grasp_average_frames)
     points = grasp.get("points_left_to_right") or []
     if len(points) != 2:
         raise RuntimeError(f"FoundationPose did not produce two grasp points: reasons={grasp.get('reason_codes')}")
@@ -313,7 +440,10 @@ def _convert_foundationpose_output(output_dir: Path, output_path: Path, args: ar
             "sequence": grasp.get("sequence"),
             "crate_color_profile": grasp.get("crate_color_profile"),
             "rgb_depth_delta_ms": grasp.get("rgb_depth_delta_ms"),
-            "height_policy": "if one valid side is occluded, reuse the unoccluded side z",
+            "height_policy": "if left/right are both valid, use their average z for both sides",
+            "selection_policy": grasp.get("selection_policy", "latest_or_last_valid"),
+            "valid_average_frame_count": grasp.get("valid_average_frame_count"),
+            "valid_average_frame_count_by_side": grasp.get("valid_average_frame_count_by_side"),
         },
         "debug_images": debug_paths,
     }
@@ -381,10 +511,15 @@ def main() -> None:
     parser.add_argument("--mask-config", default=str(FOUNDATIONPOSE_ROOT / "config" / "bootstrap_mask.json"))
     parser.add_argument("--grasp-depth-tolerance", type=float, default=0.08)
     parser.add_argument("--grasp-center-color-min-ratio", type=float, default=0.25)
+    parser.add_argument("--grasp-average-frames", type=int, default=5, help="Average the latest N valid FoundationPose grasp frames.")
     parser.add_argument("--grasp-prediction-min-inliers", type=int, default=20)
     parser.add_argument("--grasp-prediction-min-edge-span", type=float, default=0.20)
     parser.add_argument("--grasp-prediction-max-rmse", type=float, default=0.012)
     parser.add_argument("--show-window", action="store_true")
+    parser.add_argument("--skip-base-lock", action="store_true", help="Only save camera-frame grasp points.")
+    parser.add_argument("--base-output", default=str(DEFAULT_BASE_OUTPUT))
+    parser.add_argument("--cam2head", default=DEFAULT_CAM2HEAD)
+    parser.add_argument("--tf-seconds", type=float, default=2.0)
     parser.add_argument("--skip-neck-down", action="store_true")
     parser.add_argument("--skip-neck-home", action="store_true")
     parser.add_argument("--neck-down-z", type=float, default=0.0)
@@ -414,6 +549,7 @@ def main() -> None:
         print("[动作] FoundationPose 盒子识别开始", flush=True)
         _run_foundationpose(args, debug_dir)
         payload = _convert_foundationpose_output(debug_dir, output_path, args)
+        payload["output_path"] = str(output_path)
         print(f"[✓] foundationpose: detected box handles: {output_path}", flush=True)
         for obj in payload["objects"]:
             print(
@@ -424,12 +560,20 @@ def main() -> None:
             )
         for correction in payload.get("height_corrections", []):
             print(
-                "    height fallback: "
+                "    height align: "
                 f"{correction['side']} z {correction['old_z_mm']} -> {correction['new_z_mm']} mm "
-                f"from {correction['reference_side']}",
+                f"reason={correction['reason']} occluded={correction.get('occluded')}",
                 flush=True,
             )
         print(f"[✓] foundationpose: debug images: {debug_dir}", flush=True)
+        if not args.skip_base_lock:
+            _lock_payload_to_base(
+                control_client,
+                payload,
+                Path(args.base_output),
+                args.cam2head,
+                args.tf_seconds,
+            )
     finally:
         if control_client is not None and not args.skip_neck_home:
             _move_neck(

@@ -70,28 +70,84 @@ python apps/transport/run_transport_flow.py \
 
 ```text
 低头识别箱子左右抓取点
+-> 最近 5 帧 valid left/right 抓取点分别取平均
 -> 相机系抓取点锁存到 BASE
 -> 设置 MPC running mode
 -> home / 当前姿态到 transport_pregrasp_dual
--> 生成往身体 25cm、左右各向外 10cm、z=抓取点+0.05m 的外扩等待点
+-> 生成往身体 17cm、左右各向外 10cm、z=抓取点+0.38m 的外扩等待点
 -> 设置 MPC running mode
 -> transport_pregrasp_dual 到外扩等待点
--> 分段夹紧: 8cm -> 4cm -> 3cm -> 2cm
--> 每段后检测左右手指尖压力，左右都达标则停止继续收紧
+-> 开启导纳
+-> 用 /wa/points_seq_tracking_with_admittance 单段夹紧到 clamp_offset
+-> 关闭导纳
 ```
 
 默认靠箱参数：
 
 ```text
 outside_offset = 0.10 m
-clamp_offset   = 0.02 m
-clamp_offsets  = 0.08, 0.04, 0.03, 0.02 m
-clamp_pressure_abs_threshold = left/right >= 0.15
-body_offset    = -0.25 m   # BASE x 负方向，往身体 25cm
-side_z_offset  = 0.05 m    # 相比原塑料袋 +0.35m 再下 30cm
+clamp_offset   = 0.03 m
+clamp_offsets  = ""      # 默认不用分段；仅调试时手动传入
+clamp_control  = admittance
+body_offset    = -0.17 m   # BASE x 负方向，往身体 17cm；相比上一版向身体反方向外移 2cm
+side_z_offset  = 0.38 m    # 当前夹紧点上移 38cm；相比上一版下调 2cm
 motion_duration = 5.0 s
 side_motion_duration = 10.0 s   # 预抓取到两侧靠近点降速 50%
+carry_lift = 0.15 m             # 夹紧/手指补夹后抬高 15cm
+carry_waist_joints = [-0.3, 0.3, 0.0, 0.0]  # 回收后设置 3-6 四个身体关节
+carry_pullback = -0.20 m        # 抬高后 BASE x 负方向回收 20cm
 ```
+
+当前箱子搬运手型：
+
+```text
+left_hand_q  = [0.2, 0.9, 0.35, 0.45, 0.56, 0.65]
+right_hand_q = [0.2, 0.9, 0.35, 0.45, 0.56, 0.65]
+```
+
+当前主流程默认已自动执行手指补夹、抬高 15cm、往身体回收 20cm、调整腰部搬运姿态。调试时可用 `--skip-hand-adjust`、`--skip-carry-lift`、`--skip-carry-pullback` 跳过。
+
+搬运到目标货架/放置区域后，放箱并收回双臂：
+
+```bash
+python apps/transport/run_transport_place_return.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --execute
+```
+
+该流程顺序：
+
+```text
+当前搬运姿态 -> data/poses/transport/transport_place_dual.json
+-> 双手复位/松开
+-> data/runtime/transport_box_side_approach_latest.json
+-> data/poses/transport/transport_pregrasp_dual.json
+-> data/poses/transport/transport_home_dual.json
+```
+
+注意：`transport_place_dual.json` 是实际放置/夹紧点，已经去掉左右外扩偏移；`transport_box_side_approach_latest.json` 才是外扩退开点。
+
+如果导纳临时不可用，回退普通 points：
+
+```bash
+python apps/transport/run_transport_flow.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --clamp-control points \
+  --execute
+```
+
+如果机器人已经在外扩等待点，只想验证导纳夹紧 1cm，可临时传 `--clamp-offsets`：
+
+```bash
+python apps/transport/run_transport_flow.py \
+  --ws-url ws://192.168.20.102:9091 \
+  --clamp-only \
+  --clamp-control admittance \
+  --clamp-offsets 0.09 \
+  --execute
+```
+
+当前现场进度：导纳夹紧到 3cm 已验证，双手同步抬高 15cm、往身体回收 20cm、腰部姿态调整已并入主流程；搬运直腰姿态仍在优化。完整记录见 `docs/transport.md`。
 
 如果只想停在预抓取点：
 
@@ -174,6 +230,8 @@ latest.png 里 CAD 红/绿盒口投影贴住真实箱子边缘
 left/right 抓取点分别落在左右短边中心
 latest_grasp_points.json 中 valid=true
 robot_execution_allowed=true 表示两侧抓取点没有被遮挡
+当前接入层默认使用最近 5 帧 valid 抓取点平均值作为最终相机系抓取点
+当前接入层只要 left/right 都 valid，就会把两侧 z 统一为两侧 z 平均值
 ```
 
 ## 深度快照
@@ -268,7 +326,6 @@ home/safe
 -> pregrasp
 -> grasp
 -> 双手开合参数
--> 压力空手/夹持读数
 -> 再做 MPC dry-run
 ```
 
@@ -277,5 +334,4 @@ home/safe
 1. 运输阶段是双手盒子搬运，不复用塑料袋单手抓取参数。
 2. 当前输出是相机系坐标，不能直接发 MPC；后续需要接 CAM2HEAD + live TF 到 BASE。
 3. 双手运动必须同步规划，否则会推盒子。
-4. 手掌开合和压力阈值需要单独标定。
-5. 当前方案假设目标是蓝色盒子；非蓝色箱体需要换候选过滤策略。
+4. 当前方案假设目标是蓝色盒子；非蓝色箱体需要换候选过滤策略。

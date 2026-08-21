@@ -5,7 +5,11 @@
 更完整的操作细节、参数来源、排障记录见：
 
 ```text
+docs/overview.md
+docs/operations.md
 docs/grasp.md
+docs/post_grasp_identification.md
+docs/place.md
 ```
 
 ## 当前路线
@@ -16,15 +20,14 @@ docs/grasp.md
 抓取 grasp -> 搬运 transport -> 导航 navigation -> 放置 place
 ```
 
-当前已经实现并跑通的是 MPC 视觉抓取闭环，其中包含抓取后的相机前识别和放回抓取点：
+当前已经跑通并固定参数的是：
 
 ```text
-头部相机识别塑料袋
--> 锁存 BASE 坐标
+塑料袋锁存
 -> MPC 抓取
--> 举到头部相机前扫描 QR
--> 放回抓取点
--> via3->2->1->0 回收
+-> 抓后 OCR/QR
+-> 人工/导航到货架前
+-> AprilTag 货架放置
 ```
 
 SDK 路线、旧过程记录、旧参数文件已清理，避免误用。
@@ -96,7 +99,6 @@ python apps/grasp/run_grasp_flow.py \
   --scan-qr-after-present \
   --qr-transport raw \
   --qr-raw-throttle-ms 3000 \
-  --place-after-qr \
   --max-z 1.70 \
   --execute
 ```
@@ -118,16 +120,17 @@ python apps/grasp/run_grasp_flow.py \
 python apps/grasp/test_yolo.py
 ```
 
-盒子搬运第一步只读检测：
+盒子搬运/靠近测试入口：
 
 ```bash
-python apps/transport/run_box_grasp_point.py \
+python apps/transport/run_transport_flow.py \
   --ws-url ws://192.168.20.102:9091 \
-  --show-window
+  --backend foundationpose \
+  --show-window \
+  --execute
 ```
 
-该命令默认会用 MPC neck 低头识别，并在退出窗口后抬头。若只读当前头部姿态，追加
-`--skip-neck-down --skip-neck-home`。
+该阶段仍在开发，不要把运输逻辑写进 `apps/grasp/`。
 
 ## 当前固定配置
 
@@ -174,19 +177,21 @@ scripts/                     环境和现场辅助脚本
 
 ```text
 apps/grasp/
-  负责识别塑料袋、抓取、抓后 OCR/QR 识别、当前已验证的放回抓取点。
+  负责塑料袋识别、锁存和右手抓取。
+
+apps/grasp/ + docs/post_grasp_identification.md
+  负责抓后 OCR/QR 识别。当前仍复用 grasp 入口串联执行，但文档边界独立。
 
 apps/transport/
   后续负责盒子识别、左右手抓取点估计、双手夹持和搬运姿态控制。
   不要把盒子搬运逻辑写进 apps/grasp/。
-  当前已有只读抓取点识别入口：apps/transport/run_box_grasp_point.py。
+  当前 FoundationPose 识别和双臂靠近/夹紧仍在调试。
 
 apps/navigation/
   后续负责根据识别结果选择目的地、调用导航、判断到达状态。
 
 apps/place/
-  后续负责到达目标位置后的独立放置策略。当前放置动作仍在抓取闭环里，
-  等导航接入后再拆成独立阶段。
+  负责到达货架后的 AprilTag 锁存、左手拉箱、右手投放、左手推回。
 ```
 
 原则：公共 ROS/视觉/手掌模块放 `robot_grasp/`；可复用工程工具放 `tools/`；
@@ -200,6 +205,8 @@ apps/place/
 1. docs/overview.md
 2. docs/operations.md
 3. docs/grasp.md
-4. docs/flowchart.md
-5. docs/troubleshooting.md
+4. docs/post_grasp_identification.md
+5. docs/place.md
+6. docs/flowchart.md
+7. docs/troubleshooting.md
 ```

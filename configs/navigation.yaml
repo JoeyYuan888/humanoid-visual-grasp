@@ -1,6 +1,51 @@
-# Reserved for navigation stage configuration.
-
-enabled: false
+enabled: true
+action_name: /zj_humanoid/navigation/navigation
+odom_topic: /zj_humanoid/navigation/odom_info
 map_frame: map
 base_frame: BASE
-arrival_tolerance_m: 0.10
+
+defaults:
+  speed_cm_per_s: 30.0
+  safe_dist_cm: 10.0
+  distance_tolerance: 0.10
+  heading_tolerance: 0.10
+  odom_timeout_sec: 3.0
+  result_timeout_sec: 300.0
+
+# Named navigation targets. Replace these with measured map poses before use.
+# Each goal can be either:
+#   x/y/z + yaw_deg
+# or:
+#   waypoint: [x, y, z, qx, qy, qz, qw]
+goals:
+  demo_start:
+    waypoint: [0.1714, 1.351, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+  demo_mid:
+    waypoint: [-0.648, 4.131, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+  demo_end:
+    waypoint: [5.0, 3.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+  # Placeholder names for the future delivery flow.
+  grasp_area:
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    yaw_deg: 0.0
+
+  # Box transport start point. Placeholder until measured on robot map.
+  transport_start_area:
+    measured: false
+
+  # Plastic-bag placement navigation point near shelf/place workstation.
+  place_area:
+    waypoint: [-9.303523009987886, 3.7639595611339507, -0.0004334143999846444, 0.010057248292828395, -0.0009186177922379686, 0.9959701249996631, -0.08911519514809776]
+
+  # Backward-compatible alias for place_area.
+  shelf_place_area:
+    waypoint: [-9.303523009987886, 3.7639595611339507, -0.0004334143999846444, 0.010057248292828395, -0.0009186177922379686, 0.9959701249996631, -0.08911519514809776]
+
+  # Box transport default destination/place point.
+  transport_place_area:
+    waypoint: [-9.41538026566515, 3.786190846269941, -0.0018881712990937022, -0.002042785013786434, -0.002546765999154717, -0.6442150921871242, 0.7648374049500116]

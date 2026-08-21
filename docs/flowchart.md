@@ -1,7 +1,7 @@
 # 视觉抓取完整流程图
 
 本文只画流程，不替代完整技术说明。具体参数和注意事项以
-`docs/grasp.md` 为准。
+`docs/grasp.md`、`docs/post_grasp_identification.md`、`docs/place.md` 为准。
 
 项目后续还会增加盒子双手搬运阶段，设计边界见 `docs/transport.md`。
 当前已经跑通：塑料袋抓取闭环、货架箱子 AprilTag 放置流程。
@@ -19,7 +19,6 @@ python apps/grasp/run_grasp_flow.py \
   --scan-qr-after-present \
   --qr-transport raw \
   --qr-raw-throttle-ms 3000 \
-  --place-after-qr \
   --max-z 1.70 \
   --execute
 ```
